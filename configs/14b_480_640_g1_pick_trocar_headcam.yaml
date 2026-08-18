@@ -1,0 +1,53 @@
+job:
+  project: dreamdojo
+  group: pick_trocar_headcam
+  name: g1_pick_trocar_headcam_14b
+
+checkpoint:
+  save_iter: 2000
+  load_path: checkpoints/DreamDojo/14B_G1_post-train/iter_000050000/
+  load_training_state: false
+  strict_resume: false
+
+trainer:
+  max_iter: 10000
+  grad_accum_iter: 2
+  callbacks:
+    every_n_sample_reg:
+      every_n: 2000
+      fps: 5
+    every_n_sample_ema:
+      every_n: 2000
+      fps: 5
+
+model_parallel:
+  context_parallel_size: 1
+
+model:
+  config:
+    state_t: 4  # 1 + 12 // 4
+    net:
+      action_dim: 384
+      temporal_compression_ratio: 4
+      num_action_per_chunk: 12
+      zero_init_action_embedder: false
+
+dataloader_train:
+  batch_size: 2
+  dataset:
+    num_frames: 13
+    dataset_path:
+      - /localhome/local-yunl/DreamDojo/datasets/g1_pick_trocar_200_headcam
+    data_split: train
+    single_base_index: false
+    deterministic_uniform_sampling: false
+
+dataloader_val:
+  batch_size: 1
+  dataset:
+    num_frames: 13
+    dataset_path:
+      - /localhome/local-yunl/DreamDojo/datasets/g1_pick_trocar_200_headcam
+    data_split: test
+    single_base_index: false
+    deterministic_uniform_sampling: true
