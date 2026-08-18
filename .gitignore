@@ -66,3 +66,6 @@ output*/
 # Launchers (internal)
 osmo_launch.py
 ray_launch.py
+checkpoints/
+datasets/
+results/
