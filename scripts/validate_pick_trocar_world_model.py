@@ -54,6 +54,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--save-fps", type=int, default=15)
     parser.add_argument("--num-inference-steps", type=int, default=35)
+    parser.add_argument(
+        "--run-zero-action",
+        action="store_true",
+        help="Also generate and display a zero-action closed-loop rollout.",
+    )
     return parser.parse_args()
 
 
@@ -156,25 +161,27 @@ def main() -> None:
                     teacher_forcing=False,
                     zero_actions=False,
                 )
-                zero = generate_rollout(
-                    pipeline,
-                    gt,
-                    actions,
-                    lam_video,
-                    seed=base_seed,
-                    num_inference_steps=args.num_inference_steps,
-                    teacher_forcing=False,
-                    zero_actions=True,
-                )
-                comparison = np.concatenate(
-                    [
-                        add_label(gt, "REAL GT"),
-                        add_label(teacher, "GT ACTION | TEACHER FORCED"),
-                        add_label(closed, "GT ACTION | CLOSED LOOP"),
-                        add_label(zero, "ZERO ACTION | CLOSED LOOP"),
-                    ],
-                    axis=2,
-                )
+                comparison_columns = [
+                    add_label(gt, "REAL GT"),
+                    add_label(teacher, "GT ACTION | TEACHER FORCED"),
+                    add_label(closed, "GT ACTION | CLOSED LOOP"),
+                ]
+                zero = None
+                if args.run_zero_action:
+                    zero = generate_rollout(
+                        pipeline,
+                        gt,
+                        actions,
+                        lam_video,
+                        seed=base_seed,
+                        num_inference_steps=args.num_inference_steps,
+                        teacher_forcing=False,
+                        zero_actions=True,
+                    )
+                    comparison_columns.append(
+                        add_label(zero, "ZERO ACTION | CLOSED LOOP")
+                    )
+                comparison = np.concatenate(comparison_columns, axis=2)
                 prefix = f"episode_{episode_index:03d}_seed_{seed_index}"
                 mediapy.write_video(
                     str(args.output_dir / f"{prefix}_comparison.mp4"),
@@ -186,15 +193,16 @@ def main() -> None:
                     "seed_index": seed_index,
                     "teacher_forced": image_metrics(gt, teacher),
                     "closed_loop": image_metrics(gt, closed),
-                    "action_sensitivity_mae": float(
+                }
+                if zero is not None:
+                    record["action_sensitivity_mae"] = float(
                         np.mean(
                             np.abs(
                                 closed[1:].astype(np.float32)
                                 - zero[1:].astype(np.float32)
                             )
                         )
-                    ),
-                }
+                    )
                 results.append(record)
                 print(json.dumps(record, indent=2))
     finally:

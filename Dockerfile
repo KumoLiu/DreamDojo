@@ -40,6 +40,9 @@ RUN --mount=type=cache,target=/var/cache/apt \
 COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
 # Copy from the cache instead of linking since it's a mounted volume
 ENV UV_LINK_MODE=copy
+# Keep the managed Python interpreter outside /root. Pyxis may mount a user
+# home over /root, which would otherwise break .venv/bin/python symlinks.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 # Ensure installed tools can be executed out of the box
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
 
@@ -63,6 +66,25 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ARG STANDALONE
 RUN --mount=type=bind,source=.,target=/tmp/workspace \
    if [ "$STANDALONE" = "true" ] ; then cp -r /tmp/workspace/* /workspace && just install && rm -rf /workspace/.git ; else echo "Run just install to install all the dependencies at runtime" ; fi
+
+# DreamDojo runtime dependencies used by G1 training and rollout evaluation.
+# These mirror the environment that has been validated locally and on Slurm.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /workspace/.venv/bin/python \
+        "h5py==3.16.0" \
+        "lightning==2.6.5" \
+        "openai==3.3.0" \
+        "tianshou==0.5.1" \
+        "piq==0.8.0" \
+        "moviepy==2.2.1" \
+        "jsonargparse[signatures]==4.50.0" && \
+    uv pip install --python /workspace/.venv/bin/python \
+        --no-build-isolation \
+        "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9" && \
+    uv pip install --python /workspace/.venv/bin/python \
+        --no-deps \
+        --index-url=https://download.pytorch.org/whl/cu128 \
+        "torchcodec==0.5"
 
 # Place executables in the environment at the front of the path
 ENV PATH="/workspace/.venv/bin:$PATH"

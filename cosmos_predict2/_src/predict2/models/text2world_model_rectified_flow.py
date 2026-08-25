@@ -107,6 +107,7 @@ class Text2WorldModelRectifiedFlowConfig:
     use_dynamic_shift: bool = False
     train_time_distribution: str = "logitnormal"
     train_time_weight: str = "uniform"
+    motion_consistency_loss_weight: float = 0.1
 
     use_high_sigma_strategy: bool = False  # Whether to use high sigma strategy
     high_sigma_ratio: float = 0.05  # Ratio of high sigma frames
@@ -919,10 +920,19 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
         per_instance_loss = torch.mean(
             (vt_pred_B_C_T_H_W - vt_B_C_T_H_W) ** 2, dim=list(range(1, vt_pred_B_C_T_H_W.dim()))
         )
-        per_instance_motion_consistency_loss = torch.mean(
-            ((vt_pred_B_C_T_H_W[:, 1:] - vt_pred_B_C_T_H_W[:, :-1]) - (vt_B_C_T_H_W[:, 1:] - vt_B_C_T_H_W[:, :-1])) ** 2, dim=list(range(1, vt_pred_B_C_T_H_W.dim()))
-        )
-        per_instance_loss = per_instance_loss + per_instance_motion_consistency_loss * 0.1
+        if self.config.motion_consistency_loss_weight != 0:
+            per_instance_motion_consistency_loss = torch.mean(
+                (
+                    (vt_pred_B_C_T_H_W[:, 1:] - vt_pred_B_C_T_H_W[:, :-1])
+                    - (vt_B_C_T_H_W[:, 1:] - vt_B_C_T_H_W[:, :-1])
+                )
+                ** 2,
+                dim=list(range(1, vt_pred_B_C_T_H_W.dim())),
+            )
+            per_instance_loss = (
+                per_instance_loss
+                + per_instance_motion_consistency_loss * self.config.motion_consistency_loss_weight
+            )
 
         loss = torch.mean(time_weights_B * per_instance_loss)
         output_batch = {

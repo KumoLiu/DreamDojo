@@ -46,6 +46,7 @@ credentials/
 *.bin
 *.h5
 *.onnx
+*.sqsh
 
 # Media
 *.mp4
@@ -69,3 +70,4 @@ ray_launch.py
 checkpoints/
 datasets/
 results/
+migrated_checkpoints/
