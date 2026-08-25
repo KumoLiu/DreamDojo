@@ -673,3 +673,137 @@ docker/dreamdojo-cu128-v2.sqsh
 请先完整阅读 docs/EXPERIMENT_CONTEXT.md 和 docs/PICK_TROCAR_BACKUP.md，
 再根据其中的实验记录、checkpoint 路径和代码修改继续工作。
 ```
+
+## 10. 当前最重要的问题：接触阶段 trocar 漂移
+
+当前暂时优先关注 post-training，不优先进行 distillation。主要现象是：
+
+- 机器人手臂与 trocar 接触时画面发生漂移；
+- trocar 出现明显扭曲；
+- trocar 可能突然出现在手里，或突然掉落；
+- 有时整幅画面基本看不清 trocar；
+- 手与物体的接触关系不稳定。
+
+这不是普通的全图画质下降，而是 object identity、几何位置和接触关系
+不稳定。仅增加训练 iteration 或单独关闭 motion consistency loss，预计
+不能根治。
+
+### 优先排查：action 与视频时间对齐
+
+接触阶段对几十毫秒的错位非常敏感。需要检查：
+
+- 视频 timestamp 与 action timestamp 是否严格对应；
+- 是否存在 1–5 帧延迟；
+- 30 FPS / 15 FPS 重采样是否造成错位；
+- `states.npy`、`actions.npy` 和 `color_0.mp4` 是否从同一时间点开始；
+- fail-contact 数据是否有更严重的同步问题。
+
+如果 action 和视频错位，任何 loss 调整都只能缓解，不能根治。
+
+### 建议：接触阶段重采样
+
+普通随机采样中，真正的接触瞬间只占很少比例。应该提高以下窗口的采样
+权重：
+
+1. 手接近 trocar；
+2. 手指开始闭合；
+3. trocar 被遮挡或部分遮挡；
+4. trocar 被抓起；
+5. 搬运过程中；
+6. 放置或掉落；
+7. fail-contact。
+
+建议让 contact-centric windows 占训练采样的约 30%–50%，并加入“没有抓住”
+和“抓住后掉落”的 hard negative，避免模型简单学习成“手闭合就必然抓住
+trocar”。
+
+### 建议：逐步加入真实机器人数据
+
+`real_mix` 的方向是合理的，但真实数据和原始 head-camera 数据可能存在
+domain gap。建议从当前较好的 post-training checkpoint 开始，以较低学习率
+做短程实验：
+
+```text
+普通 rollout / teleop：60%–70%
+正常真实数据：         15%–20%
+fail-contact：          15%–20%
+learning rate：         5e-6–1e-5
+训练长度：              1000–3000 iterations
+```
+
+不建议一开始就使用 `4e-5` 长时间训练，以免背景和相机分布发生漂移。
+
+### 建议：增加 object-aware loss
+
+全图像素 loss 会被背景、桌面和机器人手臂区域主导。即使 trocar 消失，
+全图 MAE 也可能不高。更合理的目标是：
+
+```text
+总 loss = 全图 loss
+         + λ1 × trocar 区域 loss
+         + λ2 × 手-物体接触区域 loss
+```
+
+可选实现：
+
+- 标注少量 trocar bounding box；
+- 使用 segmentation / detection 模型生成伪标签；
+- 对接触阶段做手部和 trocar crop loss；
+- 增加 trocar presence consistency；
+- 增加 object 区域的 perceptual loss。
+
+即使只标注 100–300 个接触关键帧，也可能比继续加入大量普通窗口更有效。
+
+### 关于 motion consistency loss
+
+当前实现中的：
+
+```python
+vt_pred[:, 1:] - vt_pred[:, :-1]
+```
+
+差分的是 channel 维，不是时间维 `T`。因此它不是严格意义上的 temporal
+consistency loss，关闭它未必能解决 trocar 漂移。
+
+如果以后实现真正的 temporal loss，应作用于：
+
+```python
+vt_pred[:, :, 1:] - vt_pred[:, :, :-1]
+```
+
+但不能对所有帧强行平滑，因为抓起、碰撞和掉落本来就可能产生快速变化。
+更合理的是非接触阶段使用平滑约束，接触阶段使用 object identity 和相对
+位置约束。
+
+### 评估指标需要针对 trocar
+
+除了全图 MAE / PSNR，还应统计：
+
+- trocar 区域 MAE / PSNR；
+- trocar presence accuracy；
+- 手与 trocar 的相对距离；
+- 接触前后 trocar 位移；
+- trocar 消失帧比例；
+- 突然出现 / 突然消失次数；
+- 接触阶段的 closed-loop error。
+
+### 推荐执行顺序
+
+```text
+1. 审计 action-video 时间对齐
+2. 建立 contact / fail-contact 窗口
+3. 低学习率 contact-heavy post-training
+4. 单独评估接触阶段和 trocar 区域
+5. 再决定是否加入 object-aware loss
+6. 最后再调整 motion consistency 或模型结构
+```
+
+当前最可能的根因排序：
+
+```text
+action-video 时间错位
+> 接触阶段数据太少
+> trocar 被手遮挡导致身份保持失败
+> 全图 loss 对小物体约束不足
+> 模型长时域漂移
+```
