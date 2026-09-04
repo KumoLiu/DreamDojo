@@ -46,6 +46,7 @@ credentials/
 *.bin
 *.h5
 *.onnx
+*.sqsh
 
 # Media
 *.mp4
@@ -66,3 +67,7 @@ output*/
 # Launchers (internal)
 osmo_launch.py
 ray_launch.py
+checkpoints/
+datasets/
+results/
+migrated_checkpoints/

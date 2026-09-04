@@ -1,0 +1,57 @@
+job:
+  project: dreamdojo
+  group: pick_trocar_headcam_rollout_all_ema_both
+  name: g1_pick_trocar_headcam_2b_rollout_all_ema_both
+
+checkpoint:
+  save_iter: 500
+  load_path: /localhome/local-yunl/DreamDojo/migrated_checkpoints/g1_pick_trocar_headcam_2b_iter_000010000_ema_both/
+  load_training_state: false
+  strict_resume: false
+
+trainer:
+  max_iter: 3000
+  max_val_iter: 100
+  grad_accum_iter: 1
+  callbacks:
+    every_n_sample_reg:
+      every_n: 500
+      fps: 5
+    every_n_sample_ema:
+      every_n: 500
+      fps: 5
+
+optimizer:
+  lr: 0.00004
+
+model_parallel:
+  context_parallel_size: 1
+
+model:
+  config:
+    state_t: 4  # 1 + 12 // 4
+    net:
+      action_dim: 384
+      temporal_compression_ratio: 4
+      num_action_per_chunk: 12
+      zero_init_action_embedder: false
+
+dataloader_train:
+  batch_size: 4
+  dataset:
+    num_frames: 13
+    dataset_path:
+      - /localhome/local-yunl/DreamDojo/datasets/g1_pick_trocar_rollout_all_260_headcam
+    data_split: full
+    single_base_index: false
+    deterministic_uniform_sampling: false
+
+dataloader_val:
+  batch_size: 1
+  dataset:
+    num_frames: 13
+    dataset_path:
+      - /localhome/local-yunl/DreamDojo/datasets/g1_pick_trocar_200_headcam_val
+    data_split: full
+    single_base_index: false
+    deterministic_uniform_sampling: true

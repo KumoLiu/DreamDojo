@@ -71,6 +71,21 @@ def parse_arguments() -> argparse.Namespace:
     # )
     parser.add_argument("--input_video_root", type=str, default="bridge/annotation/test_100", help="Action root")
     parser.add_argument("--save_root", type=str, default="results/image2world", help="Save root")
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default=None,
+        help="Optional comma-separated dataset paths overriding the embodiment config.",
+    )
+    parser.add_argument(
+        "--sample_manifest",
+        type=str,
+        default=None,
+        help=(
+            "Optional JSONL manifest mapping output_index to dataset_index. "
+            "When set, --start/--end address output indices."
+        ),
+    )
 
     parser.add_argument("--start", type=int, default=0, help="Start index for processing files")
     parser.add_argument("--end", type=int, default=100, help="End index for processing files")
@@ -165,7 +180,10 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(0)
 
-    if "gr1" in args.experiment:
+    if args.dataset_path:
+        dataset_path = [path.strip() for path in args.dataset_path.split(",")]
+        dataset_mixing_weights = None
+    elif "gr1" in args.experiment:
         dataset_path, dataset_mixing_weights = get_data_path("gr1")
     elif "g1" in args.experiment:
         dataset_path, dataset_mixing_weights = get_data_path("g1")
@@ -190,6 +208,18 @@ def main():
         single_base_index=False,
         restrict_len=None,
     )
+    sample_index_by_output = None
+    if args.sample_manifest:
+        with open(args.sample_manifest) as f:
+            manifest_rows = [json.loads(line) for line in f if line.strip()]
+        sample_index_by_output = {
+            int(row["output_index"]): int(row["dataset_index"]) for row in manifest_rows
+        }
+        if len(sample_index_by_output) != len(manifest_rows):
+            raise ValueError(f"Duplicate output_index in {args.sample_manifest}")
+        logger.info(
+            f"Loaded {len(sample_index_by_output)} sample mappings from {args.sample_manifest}"
+        )
 
     # Initialize the inference handler with context parallel support
     video2world_cli = ActionVideo2WorldInference(
@@ -210,11 +240,19 @@ def main():
     # Filter out indices that are already processed
     indices_to_process = []
     for idx in all_indices:
+        if sample_index_by_output is not None and idx not in sample_index_by_output:
+            raise ValueError(f"Output index {idx} is missing from {args.sample_manifest}")
         if not os.path.exists(os.path.join(args.save_root, "actions", f"{idx}.json")):
             indices_to_process.append(idx)
             
     logger.info(f"Total samples: {len(all_indices)}, Already processed: {len(all_indices) - len(indices_to_process)}, Remaining: {len(indices_to_process)}")
     
+    if not indices_to_process:
+        logger.info("All requested samples already exist.")
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
+        return
+
     # Distribute work using strided slicing for even load balancing
     my_indices = indices_to_process[rank::world_size]
     
@@ -243,7 +281,8 @@ def main():
     for i, idx in enumerate(tqdm.tqdm(my_indices)):
         is_padding = i >= num_real
 
-        data = dataset[idx]
+        dataset_idx = sample_index_by_output[idx] if sample_index_by_output is not None else idx
+        data = dataset[dataset_idx]
         img_np_array = data["video"][:, 0, :, :].permute(1, 2, 0).cpu().numpy()
         video_np_array = data["video"].permute(1, 2, 3, 0).cpu().numpy()
         action = data["action"].cpu().numpy()

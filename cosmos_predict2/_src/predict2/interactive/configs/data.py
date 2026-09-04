@@ -64,6 +64,15 @@ dataset_gr00t_old_gr1_cosmos_warmup = L(ActionDatasetSFWarmup)(
     cr1_embeddings_path="datasets/cr1_empty_string_text_embeddings.pt",
 )
 
+dataset_pick_trocar_iter2500_warmup = L(ActionDatasetSFWarmup)(
+    data_path="datasets/g1_pick_trocar_iter2500_teacher_gen_10k",
+    cr1_embeddings_path="datasets/cr1_empty_string_text_embeddings.pt",
+)
+dataset_pick_trocar_iter2500_warmup_stratified = L(ActionDatasetSFWarmup)(
+    data_path="datasets/g1_pick_trocar_iter2500_teacher_gen_10k_stratified",
+    cr1_embeddings_path="datasets/cr1_empty_string_text_embeddings.pt",
+)
+
 # ----------- Standard GR00T Datasets -----------
 
 from groot_dreams.dataloader import MultiVideoActionDataset, get_data_path
@@ -98,6 +107,21 @@ gr00t_customized_g1_dataset_long = L(MultiVideoActionDataset)(
     dataset_mixing_weights=g1_mixing_weights,
     data_split="train",
     cr1_embeddings_path="datasets/cr1_empty_string_text_embeddings.pt"
+)
+
+pick_trocar_rollout_train_dataset_long = L(MultiVideoActionDataset)(
+    num_frames=49,
+    dataset_path=["datasets/g1_pick_trocar_rollout_all_260_headcam_train"],
+    data_split="full",
+    single_base_index=False,
+    cr1_embeddings_path="datasets/cr1_empty_string_text_embeddings.pt",
+)
+pick_trocar_rollout_train_dataset_97f = L(MultiVideoActionDataset)(
+    num_frames=97,
+    dataset_path=["datasets/g1_pick_trocar_rollout_all_260_headcam_train"],
+    data_split="full",
+    single_base_index=False,
+    cr1_embeddings_path="datasets/cr1_empty_string_text_embeddings.pt",
 )
 
 agibot_path, agibot_mixing_weights = get_data_path("agibot")
@@ -245,6 +269,18 @@ def register_interactive_data():
         cs.store(
             group=f"data_{split}",
             package=f"dataloader_{split}",
+            name="pick_trocar_iter2500_warmup",
+            node=L(make_dataloader)(dataset=dataset_pick_trocar_iter2500_warmup),
+        )
+        cs.store(
+            group=f"data_{split}",
+            package=f"dataloader_{split}",
+            name="pick_trocar_iter2500_warmup_stratified",
+            node=L(make_dataloader)(dataset=dataset_pick_trocar_iter2500_warmup_stratified),
+        )
+        cs.store(
+            group=f"data_{split}",
+            package=f"dataloader_{split}",
             name="gr00t_customized_gr1",
             node=L(make_dataloader)(dataset=gr00t_customized_gr1_dataset, num_workers=0, pin_memory=False),
         )
@@ -265,6 +301,26 @@ def register_interactive_data():
             package=f"dataloader_{split}",
             name="gr00t_customized_g1_long",
             node=L(make_dataloader)(dataset=gr00t_customized_g1_dataset_long, num_workers=0, pin_memory=False),
+        )
+        cs.store(
+            group=f"data_{split}",
+            package=f"dataloader_{split}",
+            name="pick_trocar_rollout_train_long",
+            node=L(make_dataloader)(
+                dataset=pick_trocar_rollout_train_dataset_long,
+                num_workers=0,
+                pin_memory=False,
+            ),
+        )
+        cs.store(
+            group=f"data_{split}",
+            package=f"dataloader_{split}",
+            name="pick_trocar_rollout_train_97f",
+            node=L(make_dataloader)(
+                dataset=pick_trocar_rollout_train_dataset_97f,
+                num_workers=0,
+                pin_memory=False,
+            ),
         )
         cs.store(
             group=f"data_{split}",
