@@ -377,7 +377,6 @@ class LeRobotSingleDataset(Dataset):
                                 default_state_action_meta.end,
                             )
                             stat = np.array(default_statistics[le_modality][stat_name])
-                            print(f"NOTE: Using default statistics for {our_modality}.{subkey}")
                         except ValueError:
                             indices = np.arange(
                                 state_action_meta.start,

@@ -1,1 +1,0 @@
-Our model checkpoints can be downloaded from [Hugging Face](https://huggingface.co/nvidia/DreamDojo) and can be placed in or linked to the current directory.

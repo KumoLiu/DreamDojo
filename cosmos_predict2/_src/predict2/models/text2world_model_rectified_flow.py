@@ -108,6 +108,11 @@ class Text2WorldModelRectifiedFlowConfig:
     train_time_distribution: str = "logitnormal"
     train_time_weight: str = "uniform"
     motion_consistency_loss_weight: float = 0.1
+    # Which axis of the B C T H W velocity the consistency term differences.
+    # "channel" is the original behaviour and stays the default so no existing
+    # recipe changes; it differences adjacent latent channels, which is not
+    # motion. "temporal" differences adjacent latent frames, which is.
+    motion_consistency_axis: str = "channel"
 
     use_high_sigma_strategy: bool = False  # Whether to use high sigma strategy
     high_sigma_ratio: float = 0.05  # Ratio of high sigma frames
@@ -118,6 +123,7 @@ class Text2WorldModelRectifiedFlowConfig:
 
     def __attrs_post_init__(self):
         assert self.text_encoder_class in ["T5", "umT5", "reason1_2B", "reason1_7B", "reason1p1_7B"]
+        assert self.motion_consistency_axis in ["channel", "temporal"]
 
 
 class Text2WorldModelRectifiedFlow(ImaginaireModel):
@@ -596,15 +602,16 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
 
         for _, t in enumerate(timesteps_iter):
             latent_model_input = latents
-            timestep = [t]
-
-            timestep = torch.stack(timestep)
-
-            velocity_pred = velocity_fn(noise, latent_model_input, timestep.unsqueeze(0))
+            timestep = t.expand(latents.shape[0], 1)
+            velocity_pred = velocity_fn(noise, latent_model_input, timestep)
             temp_x0 = self.sample_scheduler.step(
-                velocity_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g
+                velocity_pred,
+                t,
+                latents,
+                return_dict=False,
+                generator=seed_g,
             )[0]
-            latents = temp_x0.squeeze(0)
+            latents = temp_x0
 
         if self.net.is_context_parallel_enabled:
             if use_spatial_split:
@@ -722,15 +729,16 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
                 t_prev = t
 
             latent_model_input = latents
-            timestep = [t]
-
-            timestep = torch.stack(timestep)
-
-            velocity_pred = velocity_fn(noise, latent_model_input, timestep.unsqueeze(0))
+            timestep = t.expand(latents.shape[0], 1)
+            velocity_pred = velocity_fn(noise, latent_model_input, timestep)
             temp_x0 = self.sample_scheduler.step(
-                velocity_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g
+                velocity_pred,
+                t,
+                latents,
+                return_dict=False,
+                generator=seed_g,
             )[0]
-            latents = temp_x0.squeeze(0)
+            latents = temp_x0
 
         # Re-enable LoRA if it was disabled
         if lora_disabled:
@@ -921,12 +929,11 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
             (vt_pred_B_C_T_H_W - vt_B_C_T_H_W) ** 2, dim=list(range(1, vt_pred_B_C_T_H_W.dim()))
         )
         if self.config.motion_consistency_loss_weight != 0:
+            axis = {"channel": 1, "temporal": 2}[self.config.motion_consistency_axis]
+            pred_delta = torch.diff(vt_pred_B_C_T_H_W, dim=axis)
+            target_delta = torch.diff(vt_B_C_T_H_W, dim=axis)
             per_instance_motion_consistency_loss = torch.mean(
-                (
-                    (vt_pred_B_C_T_H_W[:, 1:] - vt_pred_B_C_T_H_W[:, :-1])
-                    - (vt_B_C_T_H_W[:, 1:] - vt_B_C_T_H_W[:, :-1])
-                )
-                ** 2,
+                (pred_delta - target_delta) ** 2,
                 dim=list(range(1, vt_pred_B_C_T_H_W.dim())),
             )
             per_instance_loss = (

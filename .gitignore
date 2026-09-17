@@ -71,3 +71,5 @@ checkpoints/
 datasets/
 results/
 migrated_checkpoints/
+train/
+cluster_logs/

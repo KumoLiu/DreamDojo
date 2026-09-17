@@ -43,7 +43,7 @@ def main() -> None:
         default=ROOT
         / "outputs/train/dreamdojo/pick_trocar/g1_pick_trocar_2b/checkpoints/iter_000002000/model_ema_bf16.pt",
     )
-    parser.add_argument("--experiment", default="dreamdojo_2b_480_640_g1_pick_trocar")
+    parser.add_argument("--experiment", required=True, help="Experiment matching --checkpoint")
     parser.add_argument(
         "--output-dir",
         type=Path,

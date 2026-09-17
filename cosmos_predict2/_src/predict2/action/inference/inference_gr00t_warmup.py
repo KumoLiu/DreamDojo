@@ -77,15 +77,6 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="Optional comma-separated dataset paths overriding the embodiment config.",
     )
-    parser.add_argument(
-        "--sample_manifest",
-        type=str,
-        default=None,
-        help=(
-            "Optional JSONL manifest mapping output_index to dataset_index. "
-            "When set, --start/--end address output indices."
-        ),
-    )
 
     parser.add_argument("--start", type=int, default=0, help="Start index for processing files")
     parser.add_argument("--end", type=int, default=100, help="End index for processing files")
@@ -208,18 +199,6 @@ def main():
         single_base_index=False,
         restrict_len=None,
     )
-    sample_index_by_output = None
-    if args.sample_manifest:
-        with open(args.sample_manifest) as f:
-            manifest_rows = [json.loads(line) for line in f if line.strip()]
-        sample_index_by_output = {
-            int(row["output_index"]): int(row["dataset_index"]) for row in manifest_rows
-        }
-        if len(sample_index_by_output) != len(manifest_rows):
-            raise ValueError(f"Duplicate output_index in {args.sample_manifest}")
-        logger.info(
-            f"Loaded {len(sample_index_by_output)} sample mappings from {args.sample_manifest}"
-        )
 
     # Initialize the inference handler with context parallel support
     video2world_cli = ActionVideo2WorldInference(
@@ -240,8 +219,6 @@ def main():
     # Filter out indices that are already processed
     indices_to_process = []
     for idx in all_indices:
-        if sample_index_by_output is not None and idx not in sample_index_by_output:
-            raise ValueError(f"Output index {idx} is missing from {args.sample_manifest}")
         if not os.path.exists(os.path.join(args.save_root, "actions", f"{idx}.json")):
             indices_to_process.append(idx)
             
@@ -281,8 +258,7 @@ def main():
     for i, idx in enumerate(tqdm.tqdm(my_indices)):
         is_padding = i >= num_real
 
-        dataset_idx = sample_index_by_output[idx] if sample_index_by_output is not None else idx
-        data = dataset[dataset_idx]
+        data = dataset[idx]
         img_np_array = data["video"][:, 0, :, :].permute(1, 2, 0).cpu().numpy()
         video_np_array = data["video"].permute(1, 2, 3, 0).cpu().numpy()
         action = data["action"].cpu().numpy()

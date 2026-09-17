@@ -46,7 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument(
         "--experiment",
-        default="dreamdojo_2b_480_640_g1_pick_trocar_headcam",
+        required=True,
+        help="Experiment matching --checkpoint; retired model configs must be restored explicitly.",
     )
     parser.add_argument(
         "--action-statistics",

@@ -12,13 +12,14 @@ import numpy as np
 import torch
 
 from cosmos_predict2._src.predict2.inference.video2world import Video2WorldInference
-from groot_dreams.dataloader import MultiVideoActionDataset
+from groot_dreams.dataloader import MultiVideoActionDataset, VideoActionDataset
 from scripts.inference_utils import (
     CHUNK_SIZE,
     CONFIG_FILE,
     add_label,
     generate_chunk,
 )
+from scripts.video_metrics import evaluate
 
 
 ROOT = Path("/localhome/local-yunl/DreamDojo")
@@ -28,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset-path",
-        default="datasets/g1_pick_trocar_200_headcam",
+        default="datasets/g1_hf_pick_trocar_teleop_success_val",
     )
     parser.add_argument("--episode-indices", nargs="+", type=int, default=[0, 1])
     parser.add_argument("--num-chunks", type=int, default=3)
@@ -36,16 +37,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=ROOT
+        default=ROOT.parent
         / (
-            "outputs/train/dreamdojo/pick_trocar_headcam/"
-            "g1_pick_trocar_headcam_2b/checkpoints/iter_000010000/"
+            "models/dreamdojo/lora_r32_scratch_lr3e-4_18k/"
+            "checkpoints/iter_000018000/"
             "model_ema_bf16.pt"
         ),
     )
     parser.add_argument(
         "--experiment",
-        default="dreamdojo_2b_480_640_g1_pick_trocar_headcam",
+        default="dreamdojo_2b_480_640_g1_hf_teleop_rollout_posttrain_lora",
     )
     parser.add_argument(
         "--output-dir",
@@ -59,11 +60,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also generate and display a zero-action closed-loop rollout.",
     )
+    parser.add_argument(
+        "--perceptual-metrics",
+        action="store_true",
+        help="Also compute SSIM and LPIPS (needs torchmetrics weights).",
+    )
     return parser.parse_args()
 
 
 def load_samples(dataset_path: str, num_frames: int):
-    return MultiVideoActionDataset(
+    dataset = MultiVideoActionDataset(
         num_frames=num_frames,
         dataset_path=dataset_path,
         data_split="full",
@@ -71,6 +77,16 @@ def load_samples(dataset_path: str, num_frames: int):
         restrict_len=None,
         deterministic_uniform_sampling=False,
     )
+    if not all(
+        isinstance(subset, VideoActionDataset) for subset in dataset.datasets
+    ):
+        loaded_types = [type(subset).__name__ for subset in dataset.datasets]
+        raise RuntimeError(
+            "Pick-trocar evaluation requires VideoActionDataset, "
+            f"but loaded {loaded_types} from {dataset_path!r}. "
+            "Ensure the container dataset path contains the embodiment name."
+        )
+    return dataset
 
 
 def generate_rollout(
@@ -105,16 +121,17 @@ def generate_rollout(
     return np.stack(output)
 
 
-def image_metrics(reference: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
-    difference = (
-        reference[1:].astype(np.float32) - prediction[1:].astype(np.float32)
-    )
-    mse = float(np.mean(np.square(difference)))
-    return {
-        "mse": mse,
-        "psnr": float(20 * np.log10(255.0 / np.sqrt(max(mse, 1e-12)))),
-        "mae": float(np.mean(np.abs(difference))),
-    }
+def image_metrics(
+    reference: np.ndarray, prediction: np.ndarray, *, perceptual: bool = False
+) -> dict[str, float]:
+    """Frame metrics plus the motion-weighted and per-step breakdown.
+
+    Scored here on the raw arrays rather than recovered from the comparison
+    video, so these carry no compression bias. SSIM and LPIPS are off by
+    default: they need torchmetrics weights, and the diffusion pipeline is
+    already resident on the GPU at this point.
+    """
+    return evaluate(reference, prediction, device="cpu", with_perceptual=perceptual)
 
 
 def main() -> None:
@@ -191,8 +208,12 @@ def main() -> None:
                 record = {
                     "episode_index": episode_index,
                     "seed_index": seed_index,
-                    "teacher_forced": image_metrics(gt, teacher),
-                    "closed_loop": image_metrics(gt, closed),
+                    "teacher_forced": image_metrics(
+                        gt, teacher, perceptual=args.perceptual_metrics
+                    ),
+                    "closed_loop": image_metrics(
+                        gt, closed, perceptual=args.perceptual_metrics
+                    ),
                 }
                 if zero is not None:
                     record["action_sensitivity_mae"] = float(
@@ -204,7 +225,18 @@ def main() -> None:
                         )
                     )
                 results.append(record)
-                print(json.dumps(record, indent=2))
+                # One line per rollout: the record now carries per-frame arrays,
+                # and dumping those turns the shard logs into thousands of
+                # numbers per episode.
+                for rollout in ("teacher_forced", "closed_loop"):
+                    metrics = record[rollout]
+                    print(
+                        f"episode {episode_index:03d} seed {seed_index} {rollout}: "
+                        f"psnr {metrics['psnr']:.2f} | "
+                        f"moving-region psnr {metrics['moving_region_psnr']:.2f} | "
+                        f"mse slope {metrics['mse_slope_per_frame']:+.3f}/frame | "
+                        f"psnr drop {metrics['psnr_drop_db']:+.2f} dB"
+                    )
     finally:
         pipeline.cleanup()
 

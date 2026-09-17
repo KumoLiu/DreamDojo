@@ -1,1 +1,0 @@
-Our datasets can be downloaded from [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Robotics-GR00T-Teleop-GR1) and can be placed in or linked to the current directory.

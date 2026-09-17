@@ -8,13 +8,24 @@ REMOTE_HOST="${REMOTE_HOST:-yunl@nb-hel-cs-001-dc-01}"
 REMOTE_BASE="${REMOTE_BASE:-/lustre/fsw/portfolios/healthcareeng/users/yunl}"
 LOCAL_ROOT="${LOCAL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
-# Set SYNC_CODE=1 to also copy the DreamDojo source tree. Large/generated
-# directories and the local virtual environment are excluded.
-SYNC_CODE="${SYNC_CODE:-0}"
+# Set SYNC_CODE=0 to sync datasets only. Large/generated directories and the
+# local virtual environment are excluded from the code sync.
+SYNC_CODE="${SYNC_CODE:-1}"
 
 DATASETS=(
+    # "g1_pick_trocar_200_headcam_train"
     # "g1_pick_trocar_rollout_all_260_headcam_train"
     # "g1_pick_trocar_rollout_all_260_headcam_eval_5s5f"
+    # "g1_pick_trocar_rollout_holdout_10_materialized"
+    # Final HF teleop + rollout WM recipe (see docs/TROCAR_PROJECT.md).
+    # dreamdojo_sweep_train.slurm resolves these by basename under /data, so
+    # every dataset an experiment YAML references must be listed here.
+    "g1_hf_pick_trocar_teleop_success_train"
+    "g1_hf_pick_trocar_rollouts_30k_train"
+    "g1_hf_pick_trocar_rollouts_10k_train"
+    "g1_hf_pick_trocar_teleop_success_val"
+    "g1_hf_pick_trocar_rollouts_30k_val"
+    "g1_hf_pick_trocar_rollouts_10k_val"
 )
 
 CHECKPOINTS=(
@@ -77,6 +88,8 @@ if [[ "${SYNC_CODE}" == "1" ]]; then
         --exclude="/docker/" \
         --exclude="/outputs/" \
         --exclude="/results/" \
+        --exclude="/train/" \
+        --exclude="/.cursor/" \
         --exclude="__pycache__/" \
         "${LOCAL_ROOT}/" \
         "${REMOTE_HOST}:${REMOTE_BASE}/code/DreamDojo/"

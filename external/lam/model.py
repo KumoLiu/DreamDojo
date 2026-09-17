@@ -1,4 +1,4 @@
-from os import makedirs, path
+from os import environ, makedirs, path
 from typing import Callable, Dict, Iterable, Tuple, Union
 
 import numpy as np
@@ -12,6 +12,27 @@ from torch.optim import AdamW, Optimizer
 OptimizerCallable = Callable[[Iterable], Optimizer]
 
 from external.lam.modules import LatentActionModel
+
+
+DEFAULT_LAM_CHECKPOINT = "checkpoints/DreamDojo/LAM_400k.ckpt"
+
+
+def resolve_lam_checkpoint(ckpt_path: str) -> str:
+    """Resolve the stock checkpoint path without silently skipping weights.
+
+    An explicit non-default argument takes precedence over the site override.
+    ``ckpt_path=None`` is handled by the caller for training LAM from scratch.
+    """
+    if ckpt_path == DEFAULT_LAM_CHECKPOINT:
+        ckpt_path = environ.get("DREAMDOJO_LAM_CHECKPOINT", ckpt_path)
+    resolved = path.abspath(path.expanduser(ckpt_path))
+    if not path.isfile(resolved):
+        raise FileNotFoundError(
+            f"LAM checkpoint not found: {resolved}. "
+            "Set DREAMDOJO_LAM_CHECKPOINT to the existing checkpoint file; "
+            "refusing to continue with uninitialized LAM weights."
+        )
+    return resolved
 
 
 class LAM(LightningModule):
@@ -33,6 +54,9 @@ class LAM(LightningModule):
         ckpt_path: Union[None, str] = None
     ) -> None:
         super(LAM, self).__init__()
+        # Check before allocating the large model, not only after construction.
+        if ckpt_path is not None:
+            ckpt_path = resolve_lam_checkpoint(ckpt_path)
         self.lam = LatentActionModel(
             in_dim=image_channels,
             model_dim=lam_model_dim,
@@ -49,20 +73,21 @@ class LAM(LightningModule):
         self.optimizer = optimizer
 
         self.ckpt_path = ckpt_path
+        self.loaded_checkpoint = None
         if ckpt_path is not None:
             self.reload_ckpt(ckpt_path)
 
     def reload_ckpt(self, ckpt_path: str) -> None:
-        if path.exists(ckpt_path):
-            lam = torch.load(ckpt_path, map_location="cpu")["state_dict"]
-            missing, unexpected = self.load_state_dict(lam, assign=True)
-            print(f"Restored LAM from {ckpt_path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
-            if len(missing) > 0:
-                print(f"Missing LAM keys: {missing}")
-            if len(unexpected) > 0:
-                print(f"Unexpected LAM keys: {unexpected}")
-        else:
-            print(f"LAM checkpoint {ckpt_path} does not exist")
+        self.loaded_checkpoint = None
+        ckpt_path = resolve_lam_checkpoint(ckpt_path)
+        lam = torch.load(ckpt_path, map_location="cpu", weights_only=True)["state_dict"]
+        missing, unexpected = self.load_state_dict(lam, strict=True, assign=True)
+        self.ckpt_path = self.loaded_checkpoint = ckpt_path
+        print(
+            f"Restored LAM from {ckpt_path} with {len(missing)} missing "
+            f"and {len(unexpected)} unexpected keys",
+            flush=True,
+        )
 
     def shared_step(self, batch: Dict) -> Tuple:
         outputs = self.lam(batch)

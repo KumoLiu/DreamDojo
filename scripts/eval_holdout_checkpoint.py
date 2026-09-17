@@ -41,7 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-inference-steps", type=int, default=35)
     parser.add_argument(
         "--experiment",
-        default="dreamdojo_2b_480_640_g1_pick_trocar_headcam_rollout_holdout_5s5f_ema_both",
+        required=True,
+        help="Experiment matching --checkpoint; no implicit historical model config.",
     )
     return parser.parse_args()
 

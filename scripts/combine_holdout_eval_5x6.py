@@ -33,13 +33,22 @@ def load_cases(dataset_path: Path) -> list[dict]:
     ]
     if len(episodes) != 10:
         raise ValueError(f"Expected 10 eval episodes, found {len(episodes)}")
-    original_ids = [int(episode["episode_index"]) for episode in episodes]
+    episode_ids = [int(episode["episode_index"]) for episode in episodes]
+    source_ids = [
+        int(episode.get("source_episode_index", episode["episode_index"]))
+        for episode in episodes
+    ]
     expected_ids = [0, 19, 21, 27, 53, 55, 127, 154, 198, 236]
-    if original_ids != expected_ids:
+    if source_ids != expected_ids:
         raise ValueError(
-            f"Unexpected eval episode IDs: {original_ids}; "
+            f"Unexpected source episode IDs: {source_ids}; "
             f"expected {expected_ids}"
         )
+    if any("source_episode_index" in episode for episode in episodes):
+        if episode_ids != list(range(10)):
+            raise ValueError(
+                f"Materialized eval episode IDs must be 0..9, got {episode_ids}"
+            )
     return episodes
 
 
@@ -125,7 +134,10 @@ def main() -> None:
     ):
         success = prepare(
             paths[success_pos],
-            f"SUCCESS | CASE {success_pos:02d}",
+            (
+                f"SUCCESS | CASE {success_pos:02d} | SOURCE "
+                f"{int(cases[success_pos].get('source_episode_index', cases[success_pos]['episode_index'])):03d}"
+            ),
             (40, 125, 40),
             args.block_width,
             args.block_height,
@@ -133,7 +145,10 @@ def main() -> None:
         )
         failure = prepare(
             paths[failure_pos],
-            f"FAILURE | CASE {failure_pos:02d}",
+            (
+                f"FAILURE | CASE {failure_pos:02d} | SOURCE "
+                f"{int(cases[failure_pos].get('source_episode_index', cases[failure_pos]['episode_index'])):03d}"
+            ),
             (45, 45, 170),
             args.block_width,
             args.block_height,
