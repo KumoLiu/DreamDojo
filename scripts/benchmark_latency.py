@@ -36,12 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=ROOT
-        / (
-            "outputs/train/dreamdojo/hf_teleop_rollout_posttrain_lora/"
-            "g1_2b_hf_teleop_rollout_posttrain_lora/checkpoints/"
-            "iter_000003000/model_ema_bf16.pt"
-        ),
+        default=ROOT.parent
+        / "models/dreamdojo/lora_r32_scratch_lr3e-4_18k/checkpoints/iter_000018000/model_ema_bf16.pt",
         help="Any checkpoint of the same architecture: latency is set by the "
         "network and the LoRA rank, not by the values of the weights.",
     )
@@ -78,30 +74,43 @@ def main() -> None:
     )
 
     print(f"\ndevice: {torch.cuda.get_device_name(0)}")
-    print(f"chunk:  {CHUNK_SIZE} frames = {CHUNK_SIZE / FPS:.2f} s of video "
-          f"at {FPS} fps\n")
-    print(f"{'steps':>6} {'latency':>12} {'per step':>10} {'per frame':>10} "
-          f"{'vs realtime':>12}")
+    print(
+        f"chunk:  {CHUNK_SIZE} frames = {CHUNK_SIZE / FPS:.2f} s of video "
+        f"at {FPS} fps\n"
+    )
+    print(
+        f"{'steps':>6} {'latency':>12} {'per step':>10} {'per frame':>10} "
+        f"{'vs realtime':>12}"
+    )
 
     for steps in args.steps:
         # The first call at a new step count pays for allocator growth and any
         # lazily built sampler state, which is not part of steady-state latency.
-        generate_chunk(pipeline, condition, actions, lam_video, seed=0,
-                       num_inference_steps=steps)
+        generate_chunk(
+            pipeline, condition, actions, lam_video, seed=0, num_inference_steps=steps
+        )
         torch.cuda.reset_peak_memory_stats()
         times = []
         for rep in range(args.reps):
             start = time.perf_counter()
-            generate_chunk(pipeline, condition, actions, lam_video,
-                           seed=rep + 1, num_inference_steps=steps)
+            generate_chunk(
+                pipeline,
+                condition,
+                actions,
+                lam_video,
+                seed=rep + 1,
+                num_inference_steps=steps,
+            )
             times.append(time.perf_counter() - start)
         mean = statistics.mean(times)
         spread = statistics.stdev(times) if len(times) > 1 else 0.0
-        print(f"{steps:>6} {mean:>8.2f} s "
-              f"{'+/- %.2f' % spread if spread else '':>3} "
-              f"{mean / steps * 1000:>7.0f} ms "
-              f"{mean / CHUNK_SIZE * 1000:>7.0f} ms "
-              f"{mean / (CHUNK_SIZE / FPS):>9.1f}x")
+        print(
+            f"{steps:>6} {mean:>8.2f} s "
+            f"{'+/- %.2f' % spread if spread else '':>3} "
+            f"{mean / steps * 1000:>7.0f} ms "
+            f"{mean / CHUNK_SIZE * 1000:>7.0f} ms "
+            f"{mean / (CHUNK_SIZE / FPS):>9.1f}x"
+        )
 
     peak = torch.cuda.max_memory_allocated() / 1024**3
     print(f"\npeak GPU memory during timing: {peak:.1f} GB")

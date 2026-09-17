@@ -119,7 +119,7 @@ RL期间WM保持冻结；train15 / eval35是调用WM时的去噪步数，不是�
 ```bash
 sbatch --job-name=dd_scratch_r32_reproduction \
   --export=ALL,EXPERIMENT=dreamdojo_2b_480_640_g1_hf_teleop_rollout_posttrain_lora,RUN_NAME=scratch_r32_reproduction,NUM_GPUS=8,MAX_ITER=18000,LOAD_TRAINING_STATE=false \
-  dreamdojo_sweep_train.slurm
+  scripts/cluster/train.slurm
 ```
 
 唯一的任务配置为[最终rank32 YAML](../configs/2b_480_640_g1_hf_teleop_rollout_posttrain_lora.yaml)。
@@ -208,6 +208,11 @@ LPIPS的late/early比值在此前小规模比较中较少受误差基线影响�
 但不能据此声称它一般性地独立于误差水平或能证明物理稳定。
 成功/失败分组工具保留为`split_eval_by_outcome.py`，不把未执行的分组算作已有结果。
 
+视频拼接统一为`python scripts/combine_eval_videos.py EVAL_DIR`；默认按数据集分页，
+`--group-by outcome`按原始真实rollout的success标签分组，缺标签单列unknown，
+不是分类器或WM预测成功率。`--rows`/`--cols`控制网格；旧固定10例/5×6布局已撤下。
+拼接需要ffmpeg；未在PATH中时可用`--ffmpeg /absolute/path/to/ffmpeg`指定现有二进制。
+
 ## 6. 三阶段奖励分类器
 
 ### 正式使用的v2
@@ -232,17 +237,22 @@ ResNet18输入4帧channel堆叠，历史偏移0/4/8/16@30fps，只看当前和�
 复现示例使用新name，勿覆盖既有v2；需保持原split、mask和实际reward预处理：
 
 ```bash
-.venv/bin/python -m scripts.milestone.extract_frames
-.venv/bin/python -m scripts.milestone.train --name v2_reproduction --epochs 8 \
+.venv/bin/python -m scripts.classifier.dataset
+.venv/bin/python -m scripts.classifier.train --name v2_reproduction --epochs 8 \
   --extra-labels outputs/milestone/reviewed_labels_v3.json
-.venv/bin/python -m scripts.milestone.calibrate_reward \
+.venv/bin/python -m scripts.classifier.calibrate_reward \
   --checkpoint outputs/milestone/v2_reproduction/best.pt --refresh
 ```
 
 训练参数已按最终checkpoint核对：8 epochs、batch128、LR3e-4、weight decay1e-4、
 seed0；ImageNet ResNet18初始化、OneCycleLR，按teleop验证mAP保存best（epoch3，0起算）。
 `train.py`默认使用最终标签，必须指定新`--name`，已有目录会拒绝覆盖。
-仅保留抽帧、标签/数据加载、模型、训练、推理、解码及reward校准这一条代码路径。
+分类器源码在`scripts/classifier/`，共7个功能文件（不计`__init__.py`）：
+`dataset.py`含抽帧缓存和数据加载，`infer.py`含概率预测、整段视频阶段解码和辅助标注；
+其余为`labels.py`、`model.py`、`train.py`、`reward.py`、`calibrate_reward.py`。
+离线阶段解码与在线reward保持分离；模型结构、预处理、标签规则和奖励阈值不变。
+代码目录已重命名，现有`outputs/milestone/`权重/标签及`datasets/milestone_cache/`
+数据缓存路径保留不动，以兼容RLinf和cluster配置。旧模块入口不再保留兼容副本。
 旧版本专用训练/评测/网页及一次性标注、裁剪脚本已删除；修订结果保留在标签数据中。
 `review_v1_val/review_sheet.csv`是沿用的30条人工校准标签，不需要v1模型，仍保留。
 
@@ -259,7 +269,7 @@ RLinf将15fps生成帧重复两次匹配30Hz历史，place两票可能来自同�
 不是policy成功率，也不是WM生成域准确率。
 生成域仍有未pick误判pick、器械复制/形变及双手重叠误判交接；历史锁存可能放大误奖。
 
-独立视频评分入口为`python -m scripts.milestone.reward --video VIDEO --checkpoint CKPT`；
+独立视频评分入口为`python -m scripts.classifier.reward --video VIDEO --checkpoint CKPT`；
 该CLI不等同于带15→30Hz与KIR处理的RLinf批量adapter。
 
 ### 分类器实验结论（简要）
@@ -280,26 +290,32 @@ RLinf将15fps生成帧重复两次匹配30Hz历史，place两票可能来自同�
 
 | 入口 | 用途 |
 | --- | --- |
-| sync_to_slurm.sh | 检查并同步所选代码/资产；执行前查看清单，避免重复传已有数据 |
-| dreamdojo_sweep_train.slurm | 任意数量数据集、独立run目录、Slurm训练 |
-| dreamdojo_sweep_eval.slurm | 选定WM、转换checkpoint、统一评测/视频 |
-| launch_local.sh | 指定唯一任务experiment和新的job.name进行本地训练 |
-| scripts/submit_sweep.py | 通用工具，读取用户另行准备的新sweep，支持dry-run与--only；不附旧实验表 |
+| scripts/cluster/image.sh build / export / upload | 一个镜像入口，显式分步构建Docker、导出SQSH、校验上传 |
+| scripts/cluster/sync.sh code / data / all | 分开同步代码与6份最终适配数据，DRY_RUN=1仅打印且不连接远端 |
+| scripts/cluster/train.slurm | 任意数量数据集、独立run目录、Slurm训练 |
+| scripts/cluster/eval.slurm | 选定WM、转换checkpoint、统一评测/视频 |
+| scripts/train_wm.sh | 指定experiment和新的job.name进行本地训练 |
+| scripts/eval_wm.sh | 最终55例WM评测，CHECKPOINT或RUN_ROOT显式指定权重 |
+| scripts/cluster/submit.py | 外部新sweep，支持--dry-run与--only；不附旧实验表 |
 | scripts/lib/chain.sh | DreamDojo自动续跑 |
+| scripts/lib/env.sh | 本地/容器共用环境初始化，使用各自repo下的.venv |
 | scripts/validate_pick_trocar_world_model.py | teacher-forced / closed-loop评估 |
-| scripts/video_metrics.py / compare_eval_runs.py | 逐case指标与配对比较 |
-| scripts/analyze_train_loss.py / plot_train_loss.py | 跨续跑段训练曲线 |
+| scripts/video_metrics.py / compare_eval_runs.py / rescore_eval_videos.py | 原始帧指标、配对比较、已保存视频补算，三者协议不同 |
+| scripts/split_eval_by_outcome.py | 按真实成功/失败标签分组汇总指标 |
+| scripts/combine_eval_videos.py | 统一视频拼接，按dataset或outcome分组 |
+| scripts/analyze_training.py summary / plot | 共用日志解析器，跨续跑段摘要或画图 |
+| scripts/benchmark_latency.py | 真实动作的WM单块延迟检查，默认最终rank32权重 |
 
 本地训练使用最终YAML，必须先选择新的job.name；下列命令会启动训练：
 
 ```bash
-NPROC=8 bash launch_local.sh \
+NPROC=8 bash scripts/train_wm.sh \
   dreamdojo_2b_480_640_g1_hf_teleop_rollout_posttrain_lora \
   job.name=my_new_scratch_r32_run
 ```
 
 旧消融YAML、sweep表及五个绑定旧配置的启动包装已移出仓库并备份。
-通用`submit_sweep.py`仍可读取外部新spec；去掉`--dry-run`会实际提交。
+通用`scripts/cluster/submit.py`仍可读取外部新spec；去掉`--dry-run`会实际提交。
 `--dry-run`只打印命令，不生成文件；实际提交才在被git忽略的
 `outputs/sweeps/<sweep>/<run>.overrides`写入参数，通过`OVERRIDES_FILE`传给Slurm。
 这是运行时传参文件，避免逗号/空格被sbatch错误拆分，不作为源码保留；
@@ -307,6 +323,25 @@ NPROC=8 bash launch_local.sh \
 历史最终run通过`OVERRIDES=optimizer.lr=0.0003`提交；现已固化进最终YAML。
 推理加载权重不需要历史`.overrides`文件。
 逗号复杂值使用独立config，避免sbatch --export / Hydra的双重解析。
+
+常用命令（后三条只处理已有本地日志/视频）：
+
+```bash
+DRY_RUN=1 bash scripts/cluster/sync.sh code
+python scripts/cluster/submit.py /path/to/new_sweep.yaml --dry-run
+python scripts/analyze_training.py summary /path/to/job1.out /path/to/job2.out
+python scripts/analyze_training.py plot --logs-dir /path/to/logs \
+  --panel 'Training|candidate=dd_candidate' --out /path/to/loss.png
+python scripts/combine_eval_videos.py /path/to/eval --group-by outcome
+```
+
+日志summary的多个文件必须是同一个run的续跑段；plot才用于多个run对照。
+图中可用`@batch`和`--x samples`按已见样本数比较，不能把不同batch的同迭代当等预算。
+镜像工具不默认串联上传，使用`DOCKER_IMAGE`、`OUTPUT`、`REMOTE_HOST`、`REMOTE_DIR`
+配置；export默认拒绝覆盖已有SQSH，显式`FORCE=1`时也先导出验证再替换。
+sync不传checkpoint、不删除远端文件，代码同步保留官方docker源码、排除大型SQSH；
+旧cluster目录中的退休脚本不会自动被删，迁移时应使用干净代码目录或另行清理。
+查看任务用原生`squeue -u "$USER"`/`sacct -j JOB_ID`，不再维护绑定旧run的监控包装。
 
 Cluster文件根为`/lustre/fsw/portfolios/healthcareeng/users/yunl/`，
 代码位于`code/DreamDojo`，数据在`datasets/`，权重在`checkpoints/`，产物在`outputs/`。
@@ -317,6 +352,12 @@ Cluster文件根为`/lustre/fsw/portfolios/healthcareeng/users/yunl/`，
 WM环境历史镜像为 `dreamdojo-cu128-v2.sqsh`；
 RLinf使用另一个独立SQSH，不能混为同一运行环境。
 
+通用eval入口优先使用`EVAL_GPUS`，其次沿用调度器的`CUDA_VISIBLE_DEVICES`，
+未指定时才枚举GPU；显式空可见列表会拒绝启动。故障GPU不再写死到通用脚本：
+本地启动须先确认健康卡并显式设置`EVAL_GPUS`或`EXCLUDE_GPUS`，cluster不沿用本地故障卡限制。
+Slurm同时挂载当前`scripts/`和`external/`，确保新入口与严格LAM加载代码生效，
+虚拟环境仍使用镜像内的`/workspace/.venv`。
+
 评估使用与checkpoint结构匹配的13-frame配置；
 `HORIZON=auto`不为长固定窗口重复padding；新协议设置新的 `EVAL_TAG` 避免覆盖结果。
 本地其他rank/LR配置已归档；cluster旧代码及原运行快照本次未改动。
@@ -326,7 +367,7 @@ RLinf本地源码的默认WM权重与experiment已成对改为最终scratch rank
 使用7卡、56 env×2、global batch112/micro8，每代仍20次更新，但采样量不同。
 旧cluster快照及SQSH尚未同步这些默认值。历史r64必须先恢复匹配配置，不能只换权重路径。
 
-自动续跑由`dreamdojo_sweep_train.slurm`调用`scripts/lib/chain.sh`；
+自动续跑由`scripts/cluster/train.slurm`调用`scripts/lib/chain.sh`；
 `CHAIN_TIMEOUT`默认3.9h，超时后在`MAX_RUNS`内提交后继job，
 使用同一run目录与`checkpoints/latest_checkpoint.txt`恢复，正常结束不继续提交。
 新实验必须用独立run名；不要让两个job写同一个checkpoint目录。
@@ -373,13 +414,14 @@ Dockerfile/entrypoint保留已验证的依赖安装、Pyxis Python路径与可�
 RLinf侧`toolkits/world_model/dreamdojo_validation.py`验证跨repo动作桥接/条件一致性，
 不迁入本repo；这里的`validate_pick_trocar_world_model.py`仍用于独立WM评估。
 
-分类器仅保留`tests/milestone/test_v2.py`这一个CPU安全测试文件：
-掉落/mask、因果帧堆叠、三头checkpoint格式、最终默认参数及防覆盖。
+分类器仅保留`tests/classifier/test_v2.py`这一个CPU安全测试文件：
+掉落/mask、因果帧堆叠、三头checkpoint格式、最终默认参数及防覆盖，
+以及合并后的抽帧缓存复用、阶段顺序与成功/失败约束。
 不依赖旧实验产物、不下载预训练模型；使用现有环境，不执行uv sync：
 
 ```bash
 CUDA_VISIBLE_DEVICES='' PYTHONPATH=. /localhome/local-yunl/RLinf/.venv/bin/python -m pytest \
-  --noconftest -p no:cacheprovider -c /dev/null -q tests/milestone
+  --noconftest -p no:cacheprovider -c /dev/null -q tests/classifier
 ```
 
 CI保持不变；RLinf端动作桥接、推理、LAM、续跑等检查按其项目文档运行。
@@ -401,6 +443,23 @@ v0/v1/v3输出移到仓库外（可恢复），v2权重和正式标签未改，�
 
 同日按官方main完成上游补丁审查和精简；原文件、现有暂存/未暂存差异及验证记录在
 `/localhome/local-yunl/code_cleanup_archive/20260917_upstream_audit.gZE0UCcb/`。
+
+同日将分类器代码/测试目录统一为`classifier`，抽帧并入dataset、阶段解码并入infer，
+9个功能文件精简为7个；没有移动权重、标签或缓存，也未修改CI/RLinf/cluster。
+改前源码与资产校验记录：
+`/localhome/local-yunl/code_cleanup_archive/20260917_classifier_refactor.eFtFn5O9/`。
+验证：9项CPU测试通过，5个新CLI入口的`--help`可用；50个函数/类的逻辑保持不变。
+正式v2权重严格加载成功，同一CPU输入在改前/改后/RLinf网络上的输出完全一致；
+正式权重与标签文件hash未变。
+
+同日精简外围脚本：自定义外围脚本33→19，5,368→3,240行（不计分类器和官方脚本）。
+视频拼接4→1，日志摘要/绘图2→1，镜像构建/导出/上传3→1；cluster工具集中到
+`scripts/cluster/`，本地入口统一为train_wm/eval_wm。旧260条数据holdout流程、
+固定case/布局、旧二分类reward验证和重复训练/监控包装已移除；数据、权重、结果未删。
+20项CPU/模拟外部命令检查、RLinf 171项CPU回归及分类器9项检查通过，
+其中真实合成视频完成拼接并验证默认布局像素一致；没有实际构建镜像、提交或同步cluster。
+原文件、前后快照及一次性验证在仓库外：
+`/localhome/local-yunl/code_cleanup_archive/20260917_peripheral_cleanup.ECbloESI/`。
 
 更早的四篇长流水账逐字原文在
 `/localhome/local-yunl/code_cleanup_archive/20260916_project_closeout.bA84wJ/DreamDojo/files/docs/`。

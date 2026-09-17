@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 import torch
 
-from scripts.milestone import dataset, train
-from scripts.milestone.labels import Drop, Episode, cumulative_targets, loss_weights
-from scripts.milestone.model import MilestoneNet
-from scripts.milestone.reward import CONFIRM_COUNT, CONFIRM_WINDOW, THRESHOLDS
+from scripts.classifier import dataset, infer, train
+from scripts.classifier.labels import Drop, Episode, cumulative_targets, loss_weights
+from scripts.classifier.model import MilestoneNet
+from scripts.classifier.reward import CONFIRM_COUNT, CONFIRM_WINDOW, THRESHOLDS
 
 
 def test_drop_targets_and_uncertain_masks():
@@ -71,6 +71,8 @@ def test_final_training_and_reward_defaults(monkeypatch):
     assert not args.include_rollout_val
     assert THRESHOLDS == (0.8, 0.8, 0.8)
     assert CONFIRM_WINDOW == (15, 15, 2) and CONFIRM_COUNT == (13, 13, 2)
+    assert infer.OUTPUT_ROOT.name == "milestone"
+    assert dataset.CACHE_ROOT.name == "milestone_cache"
 
 
 def test_training_refuses_existing_run_before_reading_data(tmp_path, monkeypatch):
@@ -83,3 +85,41 @@ def test_training_refuses_existing_run_before_reading_data(tmp_path, monkeypatch
     with pytest.raises(FileExistsError):
         train.main()
     assert checkpoint.read_bytes() == b"preserve-final-checkpoint"
+
+
+def test_frame_extraction_and_cache_reuse(tmp_path, monkeypatch):
+    monkeypatch.setattr(dataset, "CACHE_ROOT", tmp_path)
+    frames = iter([np.full((32, 48, 3), 100, dtype=np.uint8)] * 4)
+    released = []
+
+    class Capture:
+        def read(self):
+            frame = next(frames, None)
+            return frame is not None, frame
+
+        def release(self):
+            released.append(True)
+
+    monkeypatch.setattr(dataset.cv2, "VideoCapture", lambda _path: Capture())
+    task = ("synthetic", 2, 3, "synthetic.mp4")
+    assert dataset._extract(task) == ("synthetic", 2, 3, "ok")
+    assert released == [True]
+    assert len(list(dataset.episode_dir("synthetic", 2).glob("*.jpg"))) == 3
+    assert dataset._read("synthetic", 2, 0).shape == (270, 360, 3)
+    monkeypatch.setattr(
+        dataset.cv2, "VideoCapture", lambda _path: pytest.fail("cache was not reused")
+    )
+    assert dataset._extract(task) == ("synthetic", 2, 3, "cached")
+
+
+@pytest.mark.parametrize("success,reached", [(None, 3), (True, 3), (False, 2)])
+def test_offline_decode_preserves_stage_order_and_outcome(success, reached):
+    probs = np.full((12, 3), 0.01)
+    for head, frame in enumerate((2, 5, 8)):
+        probs[frame:, head] = 0.99
+    decoded = infer.decode(probs, success=success)
+    assert decoded.reached == reached
+    assert decoded.reached_frames() == (2, 5, 8)[:reached]
+    assert np.all(np.diff(decoded.states) >= 0)
+    assert decoded.constraint_conflict == (success is False)
+    assert np.isfinite(infer.review_priority(decoded))

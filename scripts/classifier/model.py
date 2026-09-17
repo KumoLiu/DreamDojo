@@ -6,8 +6,8 @@ import torch
 from torch import nn
 from torchvision.models import ResNet18_Weights, resnet18
 
-from scripts.milestone.dataset import NUM_STACK
-from scripts.milestone.labels import NUM_HEADS
+from scripts.classifier.dataset import NUM_STACK
+from scripts.classifier.labels import NUM_HEADS
 
 
 class MilestoneNet(nn.Module):

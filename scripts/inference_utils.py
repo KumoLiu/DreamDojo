@@ -2,88 +2,16 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import cv2
 import numpy as np
 import torch
-import torchvision
-from loguru import logger
 
 from cosmos_predict2._src.predict2.inference.video2world import Video2WorldInference
-from groot_dreams.dataloader import MultiVideoActionDataset
 
-
-CONFIG_FILE = "cosmos_predict2/_src/predict2/action/configs/action_conditioned/config.py"
+CONFIG_FILE = (
+    "cosmos_predict2/_src/predict2/action/configs/action_conditioned/config.py"
+)
 CHUNK_SIZE = 12
-TIMESTEP_INTERVAL = 2
-
-
-def largest_chunk_aligned_frames(
-    base_index: int,
-    episode_len: int,
-    *,
-    chunk_size: int = CHUNK_SIZE,
-    timestep_interval: int = TIMESTEP_INTERVAL,
-) -> int:
-    """Return the largest valid frame count aligned to complete action chunks."""
-    max_n = (episode_len - base_index - 1) // timestep_interval
-    num_frames = 1 + chunk_size * ((max_n - 1) // chunk_size)
-    if num_frames < 1 + chunk_size:
-        raise RuntimeError(f"Not enough frames from base_index={base_index}")
-    return num_frames
-
-
-def episode_lengths(dataset_path: str | Path) -> dict[int, int]:
-    """Read episode lengths from LeRobot metadata."""
-    path = Path(dataset_path) / "meta" / "episodes.jsonl"
-    lengths: dict[int, int] = {}
-    for line in path.read_text().splitlines():
-        row = json.loads(line)
-        lengths[int(row["episode_index"])] = int(row["length"])
-    return lengths
-
-
-def ego_view_source_key(dataset_path: str | Path) -> str:
-    """Return the LeRobot video feature mapped to DreamDojo's ego_view."""
-    modality_path = Path(dataset_path) / "meta" / "modality.json"
-    modality = json.loads(modality_path.read_text())
-    try:
-        return str(modality["video"]["ego_view"]["original_key"])
-    except KeyError as error:
-        raise ValueError(
-            f"Missing video.ego_view.original_key in {modality_path}"
-        ) from error
-
-
-def load_lerobot_episode(
-    dataset_path: str,
-    episode_index: int,
-    num_frames: int,
-) -> dict:
-    """Load one full-prefix LeRobot episode sample starting at base index zero."""
-    dataset = MultiVideoActionDataset(
-        num_frames=num_frames,
-        dataset_path=dataset_path,
-        data_split="full",
-        single_base_index=True,
-        restrict_len=None,
-        deterministic_uniform_sampling=False,
-    )
-    inner = dataset.datasets[0].lerobot_dataset
-    trajectory_id, base_index = inner.all_steps[episode_index]
-    if int(trajectory_id) != episode_index or int(base_index) != 0:
-        raise RuntimeError(
-            f"Expected episode {episode_index} base 0; got "
-            f"{trajectory_id}, {base_index}"
-        )
-    data = dataset[episode_index]
-    logger.info(
-        f"Loaded episode={episode_index}, video={tuple(data['video'].shape)}, "
-        f"action={tuple(data['action'].shape)}"
-    )
-    return data
 
 
 def generated_to_uint8(generated: torch.Tensor) -> np.ndarray:
@@ -126,9 +54,7 @@ def generate_chunk(
         [image, torch.zeros_like(image).repeat(chunk_size, 1, 1, 1)],
         dim=0,
     )
-    video_input = (
-        video_input.to(torch.uint8).unsqueeze(0).permute(0, 2, 1, 3, 4)
-    )
+    video_input = video_input.to(torch.uint8).unsqueeze(0).permute(0, 2, 1, 3, 4)
     kwargs = {}
     if num_inference_steps is not None:
         kwargs["num_steps"] = num_inference_steps
@@ -147,40 +73,6 @@ def generate_chunk(
     return generated_to_uint8(generated)
 
 
-def generate_closed_loop(
-    pipeline: Video2WorldInference,
-    data: dict,
-    num_frames: int,
-) -> np.ndarray:
-    """Generate a full closed-loop rollout using GT actions.
-
-    This preserves the seed and stitching behavior of the original long-form
-    inference script.
-    """
-    actions = data["action"][: num_frames - 1]
-    lam_video = data["lam_video"]
-    current: np.ndarray | torch.Tensor = data["video"].transpose(0, 1)[:1]
-    chunks: list[np.ndarray] = []
-
-    for chunk_index, start in enumerate(range(0, len(actions), CHUNK_SIZE)):
-        action_chunk = actions[start : start + CHUNK_SIZE]
-        if action_chunk.shape[0] != CHUNK_SIZE:
-            raise RuntimeError(f"Incomplete action chunk at {start}")
-        generated = generate_chunk(
-            pipeline,
-            current,
-            action_chunk,
-            lam_video[start * 2 : (start + CHUNK_SIZE) * 2],
-            seed=start,
-        )
-        current = generated[-1]
-        chunks.append(generated)
-        logger.info(f"chunk {chunk_index + 1}/{len(actions) // CHUNK_SIZE}")
-
-    stitched = [chunks[0]] + [chunk[:CHUNK_SIZE] for chunk in chunks[1:]]
-    return np.concatenate(stitched, axis=0)
-
-
 def add_label(
     video: np.ndarray,
     label: str,
@@ -194,9 +86,7 @@ def add_label(
     text_y = min(32, bar_height - 10)
     for frame in labeled:
         overlay = frame.copy()
-        cv2.rectangle(
-            overlay, (0, 0), (frame.shape[1], bar_height), (0, 0, 0), -1
-        )
+        cv2.rectangle(overlay, (0, 0), (frame.shape[1], bar_height), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
         cv2.putText(
             frame,

@@ -6,31 +6,25 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ "${1:-}" == --help ]]; then
+  echo "Usage: CHECKPOINT=/path/model_ema_bf16.pt bash scripts/eval_wm.sh"
+  echo "Optional: RUN_ROOT, ITERATION, EXPERIMENT, OUT_ROOT, HORIZON=auto, NUM_INFERENCE_STEPS=35"
+  echo "GPU selection: EVAL_GPUS (indices/UUIDs), or CUDA_VISIBLE_DEVICES; EXCLUDE_GPUS filters discovered UUIDs."
+  exit 0
+fi
 cd "$ROOT"
-source "$ROOT/env_local.sh"
+source "$ROOT/scripts/lib/env.sh"
 
 # The final rank32 recipe is the default; cluster jobs pass an explicit run.
-VARIANT="${VARIANT:-lora}"
-case "$VARIANT" in
-  lora)
-    RUN_ROOT="${RUN_ROOT:-outputs/train/dreamdojo/hf_teleop_rollout_posttrain_lora/lora_r32_scratch_lr3e-4_18k}"
-    EXPERIMENT="dreamdojo_2b_480_640_g1_hf_teleop_rollout_posttrain_lora"
-    ;;
-  custom)
-    # Used by dreamdojo_sweep_eval.slurm, where the run directory and
-    # experiment name come from the sweep spec rather than being hardcoded.
-    : "${RUN_ROOT:?VARIANT=custom requires RUN_ROOT}"
-    : "${EXPERIMENT:?VARIANT=custom requires EXPERIMENT}"
-    ;;
-  *)
-    echo "VARIANT must be lora or custom, got '$VARIANT'" >&2
-    exit 1
-    ;;
-esac
+EXPERIMENT="${EXPERIMENT:-dreamdojo_2b_480_640_g1_hf_teleop_rollout_posttrain_lora}"
 
 ITERATION="${ITERATION:-18000}"
 ITER_PADDED="$(printf "%09d" "$ITERATION")"
-CHECKPOINT="$RUN_ROOT/checkpoints/iter_${ITER_PADDED}/model_ema_bf16.pt"
+if [[ -n "${RUN_ROOT:-}" ]]; then
+  CHECKPOINT="${CHECKPOINT:-$RUN_ROOT/checkpoints/iter_${ITER_PADDED}/model_ema_bf16.pt}"
+else
+  CHECKPOINT="${CHECKPOINT:-$ROOT/../models/dreamdojo/lora_r32_scratch_lr3e-4_18k/checkpoints/iter_000018000/model_ema_bf16.pt}"
+fi
 
 # num_frames = 1 + 12 * num_chunks, and the loader subsamples video by 2, so an
 # episode needs 2 * num_frames of its 30fps frames to fill the horizon without
@@ -46,22 +40,13 @@ CHECKPOINT="$RUN_ROOT/checkpoints/iter_${ITER_PADDED}/model_ema_bf16.pt"
 HORIZON="${HORIZON:-auto}"
 NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-35}"
 
-# Shards address GPUs by UUID rather than index. The card at 0000:ad:00.0 drops
-# off the driver under load, and when it goes the survivors are renumbered, so
-# an index captured before the fault points at a different GPU afterwards.
-#
-# Two cards are excluded by default:
-#   GPU-77264942  0000:ad:00.0  falls off the driver under load
-#   GPU-217ac2db  0000:ae:00.0  its NVLink peer; once ad:00.0 goes, this one
-#                               cannot create a CUDA context either and every
-#                               episode dealt to it dies on "device busy or
-#                               unavailable" (nvidia-smi still lists it, and
-#                               nvidia-smi nvlink shows its peer link down)
-# Set EXCLUDE_GPUS empty to use every visible GPU, or EVAL_GPUS to pick the
-# pool explicitly.
-EXCLUDE_GPUS="${EXCLUDE_GPUS-GPU-77264942,GPU-217ac2db}"
+# Prefer explicit/scheduler-assigned devices. Machine-specific faulty GPUs
+# belong in the caller's EVAL_GPUS/EXCLUDE_GPUS, not shared cluster defaults.
+EXCLUDE_GPUS="${EXCLUDE_GPUS:-}"
 if [[ -n "${EVAL_GPUS:-}" ]]; then
   IFS=',' read -r -a GPU_IDS <<<"$EVAL_GPUS"
+elif [[ -v CUDA_VISIBLE_DEVICES ]]; then
+  IFS=',' read -r -a GPU_IDS <<<"$CUDA_VISIBLE_DEVICES"
 else
   mapfile -t GPU_IDS < <(
     nvidia-smi -L 2>/dev/null | sed -n 's/^GPU [0-9]*: .*(UUID: \(GPU-[0-9a-f-]*\))$/\1/p' |
@@ -90,13 +75,12 @@ if ! CUDA_VISIBLE_DEVICES="${GPU_IDS[0]}" \
   echo "ERROR: cannot create a CUDA context on this node." >&2
   echo "  nvidia-smi sees $(nvidia-smi -L 2>/dev/null | wc -l) GPU(s)," \
        "$NUM_GPUS usable, but torch cannot initialise CUDA." >&2
-  echo "  Recover the driver before evaluating:" >&2
-  echo "    sudo rmmod nvidia_uvm && sudo modprobe nvidia_uvm" >&2
+  echo "  Check the driver and explicit EVAL_GPUS selection before retrying." >&2
   exit 1
 fi
 
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
-OUT_ROOT="${OUT_ROOT:-$ROOT/outputs/eval/hf_posttrain_${VARIANT}_val_iter${ITERATION}_h${HORIZON}_${RUN_TS}}"
+OUT_ROOT="${OUT_ROOT:-$ROOT/outputs/eval/wm_val_iter${ITERATION}_h${HORIZON}_${RUN_TS}}"
 LOG_DIR="$OUT_ROOT/logs"
 
 VAL_SETS=(
@@ -113,7 +97,6 @@ mkdir -p "$LOG_DIR"
   echo "HF Post-Train Validation Eval"
   echo "Started: $(date -Is)"
   echo "============================================================"
-  echo "  variant             = $VARIANT"
   echo "  checkpoint          = $CHECKPOINT"
   echo "  experiment          = $EXPERIMENT"
   echo "  horizon             = $HORIZON"
@@ -297,7 +280,7 @@ print("\nTE = teacher forced, CL = closed loop")
 print("frames = mean evaluated video frames per episode (15 fps)")
 PY
 
-python3 scripts/combine_hf_val_eval.py "$OUT_ROOT" 2>&1 \
+python3 scripts/combine_eval_videos.py "$OUT_ROOT" 2>&1 \
   | tee "$LOG_DIR/combine.log" || echo "Overview video generation failed" >&2
 
 {

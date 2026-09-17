@@ -25,7 +25,7 @@
 #
 # DreamDojo note: the imaginaire checkpointer tracks completed saves with a
 # checkpoints/latest_checkpoint.txt file rather than a `latest` directory, so
-# pass no argument to chain_should_resume here -- dreamdojo_sweep_train.slurm
+# pass no argument to chain_should_resume here -- scripts/cluster/train.slurm
 # reads that file directly to decide whether the run is already finished.
 
 # Stable chain identifier: first job's SLURM_JOB_ID, forwarded on resubmit.

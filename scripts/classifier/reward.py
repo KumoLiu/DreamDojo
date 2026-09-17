@@ -9,7 +9,7 @@ successful teleop alone. See docs/TROCAR_PROJECT.md for the experiment summary.
 This CLI reads every input frame once. RLinf separately duplicates 15 fps WM
 frames into 30 Hz ticks and handles batched histories and KIR initialization.
 
-    .venv/bin/python -m scripts.milestone.reward --video clip.mp4
+    .venv/bin/python -m scripts.classifier.reward --video clip.mp4
 """
 
 from __future__ import annotations
@@ -23,15 +23,15 @@ import cv2
 import numpy as np
 import torch
 
-from scripts.milestone.dataset import (
+from scripts.classifier.dataset import (
     CROP_SIZE,
     FRAME_OFFSETS,
+    STORE_SIZE,
     _normalise,
 )
-from scripts.milestone.extract_frames import STORE_SIZE
-from scripts.milestone.infer import OUTPUT_ROOT, load_checkpoint
-from scripts.milestone.labels import HEAD_NAMES, NUM_HEADS
-from scripts.milestone.model import MilestoneNet
+from scripts.classifier.infer import OUTPUT_ROOT, load_checkpoint
+from scripts.classifier.labels import HEAD_NAMES, NUM_HEADS
+from scripts.classifier.model import MilestoneNet
 
 # Order: picked, handed, placed. Shorter place confirmation accommodates clips
 # ending immediately after placement. Calibrate with actual reward preprocessing.
@@ -78,8 +78,7 @@ class MilestoneReward:
     @staticmethod
     def _prepare(frame_bgr: np.ndarray) -> np.ndarray:
         if frame_bgr.shape[:2][::-1] != STORE_SIZE:
-            frame_bgr = cv2.resize(frame_bgr, STORE_SIZE,
-                                   interpolation=cv2.INTER_AREA)
+            frame_bgr = cv2.resize(frame_bgr, STORE_SIZE, interpolation=cv2.INTER_AREA)
         x0 = (STORE_SIZE[0] - CROP_SIZE[0]) // 2
         y0 = (STORE_SIZE[1] - CROP_SIZE[1]) // 2
         return frame_bgr[y0 : y0 + CROP_SIZE[1], x0 : x0 + CROP_SIZE[0]]
@@ -114,7 +113,7 @@ class MilestoneReward:
             stage=self.stage,
             progress=float(probs.sum()),
             probs=probs,
-            newly_reached=tuple(HEAD_NAMES[before:self.stage]),
+            newly_reached=tuple(HEAD_NAMES[before : self.stage]),
         )
 
     def potential(self) -> float:
@@ -157,12 +156,15 @@ def main() -> None:
     args = parser.parse_args()
 
     reward = MilestoneReward(args.checkpoint)
-    print(f"thresholds: " + ", ".join(
-        f"{n} {t:.3f}" for n, t in zip(HEAD_NAMES, reward.thresholds)
-    ))
+    print(
+        "thresholds: "
+        + ", ".join(f"{n} {t:.3f}" for n, t in zip(HEAD_NAMES, reward.thresholds))
+    )
     result = score_video(args.video, reward)
-    print(f"\n{result['frames']} frames, total reward {result['total_reward']:.0f}, "
-          f"final stage {result['final_stage']}/{NUM_HEADS}")
+    print(
+        f"\n{result['frames']} frames, total reward {result['total_reward']:.0f}, "
+        f"final stage {result['final_stage']}/{NUM_HEADS}"
+    )
     for name in HEAD_NAMES:
         frame = result["first_reached"].get(name)
         print(f"  {name:8s} {'frame ' + str(frame) if frame is not None else 'never'}")

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Submit a set of DreamDojo comparison runs to SLURM from one sweep spec.
 
-Each run becomes an independent sbatch job built from dreamdojo_sweep_train.slurm.
+Each run becomes an independent sbatch job built from scripts/cluster/train.slurm.
 Run names must be unique because they set `job.name`, which decides the output
 directory; a collision would make two runs overwrite each other's checkpoints.
 
-    python3 scripts/submit_sweep.py /path/to/new_sweep.yaml --dry-run
-    python3 scripts/submit_sweep.py /path/to/new_sweep.yaml
+    python3 scripts/cluster/submit.py /path/to/new_sweep.yaml --dry-run
+    python3 scripts/cluster/submit.py /path/to/new_sweep.yaml
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SLURM_TEMPLATE = REPO_ROOT / "dreamdojo_sweep_train.slurm"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SLURM_TEMPLATE = REPO_ROOT / "scripts/cluster/train.slurm"
 # Keys the template reads from the environment; anything else in a run block is
 # treated as a Hydra override so typos surface as config errors, not silence.
 ENV_KEYS = {
@@ -193,7 +193,9 @@ def main() -> None:
     print("Submitted:")
     for run_name, job_id in submitted:
         print(f"  {job_id}  {run_name}")
-    print(f"\nMonitor: squeue -u $USER\nCancel:  scancel {' '.join(j for _, j in submitted)}")
+    print(
+        f"\nMonitor: squeue -u $USER\nCancel:  scancel {' '.join(j for _, j in submitted)}"
+    )
 
 
 if __name__ == "__main__":

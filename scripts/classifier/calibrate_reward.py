@@ -24,7 +24,7 @@ for training and still moves the odd probability enough to flip a milestone
 whose window barely fits inside the episode, which is how a setting calibrated
 on the cache scored 30 of 30 there and 29 of 30 in the reward itself.
 
-    .venv/bin/python -m scripts.milestone.calibrate_reward
+    .venv/bin/python -m scripts.classifier.calibrate_reward
 """
 
 from __future__ import annotations
@@ -38,9 +38,9 @@ import cv2
 import numpy as np
 import torch
 
-from scripts.milestone.infer import OUTPUT_ROOT
-from scripts.milestone.labels import DATASET_ROOT, HEAD_NAMES, NUM_HEADS
-from scripts.milestone.reward import MilestoneReward
+from scripts.classifier.infer import OUTPUT_ROOT
+from scripts.classifier.labels import DATASET_ROOT, HEAD_NAMES, NUM_HEADS
+from scripts.classifier.reward import MilestoneReward
 
 NEVER = {"never", "none", "-", ""}
 
@@ -81,10 +81,7 @@ def episode_probs(reward: MilestoneReward, path: Path) -> np.ndarray:
 def load(sheet: Path, checkpoint: Path, refresh: bool):
     rows = list(csv.DictReader(open(sheet)))
     truths = [
-        [
-            None if str(r[h]).strip().lower() in NEVER else int(r[h])
-            for h in HEAD_NAMES
-        ]
+        [None if str(r[h]).strip().lower() in NEVER else int(r[h]) for h in HEAD_NAMES]
         for r in rows
     ]
     keys = [f"{r['dataset']}|{int(r['episode_index'])}" for r in rows]
@@ -160,8 +157,9 @@ def margin(episodes, thresholds, window, count) -> float:
             if len(above) < window[k]:
                 peak = int(above.sum())
             else:
-                sums = np.convolve(above.astype(int), np.ones(window[k], int),
-                                   mode="valid")
+                sums = np.convolve(
+                    above.astype(int), np.ones(window[k], int), mode="valid"
+                )
                 peak = int(sums.max())
             worst = min(worst, count[k] - peak)
     return worst
@@ -169,15 +167,16 @@ def margin(episodes, thresholds, window, count) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sheet", type=Path,
-                        default=OUTPUT_ROOT / "review_v1_val/review_sheet.csv")
-    parser.add_argument("--checkpoint", type=Path,
-                        default=OUTPUT_ROOT / "v2/best.pt")
-    parser.add_argument("--refresh", action="store_true",
-                        help="Re-run the model instead of reusing cached "
-                             "probabilities.")
-    parser.add_argument("--thresholds", nargs="+", type=float,
-                        default=[0.8, 0.9, 0.95])
+    parser.add_argument(
+        "--sheet", type=Path, default=OUTPUT_ROOT / "review_v1_val/review_sheet.csv"
+    )
+    parser.add_argument("--checkpoint", type=Path, default=OUTPUT_ROOT / "v2/best.pt")
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-run the model instead of reusing cached probabilities.",
+    )
+    parser.add_argument("--thresholds", nargs="+", type=float, default=[0.8, 0.9, 0.95])
     args = parser.parse_args()
 
     episodes = load(args.sheet, args.checkpoint, args.refresh)
@@ -189,44 +188,52 @@ def main() -> None:
     grasp_grid = [(7, 5), (10, 8), (12, 10), (15, 13), (18, 16), (20, 18), (24, 22)]
     place_grid = [(2, 2), (3, 3), (5, 4), (7, 5), (10, 8)]
 
-    print(f"{'thr':>5} {'pick/hand':>10} {'placed':>8} {'exact':>7} "
-          f"{'false':>6} {'missed':>7} {'margin':>7} "
-          f"{'delay picked/handed/placed':>28}")
+    print(
+        f"{'thr':>5} {'pick/hand':>10} {'placed':>8} {'exact':>7} "
+        f"{'false':>6} {'missed':>7} {'margin':>7} "
+        f"{'delay picked/handed/placed':>28}"
+    )
     winners = []
     for thr in args.thresholds:
         for gw, gc in grasp_grid:
             for pw, pc in place_grid:
                 window, count = (gw, gw, pw), (gc, gc, pc)
                 thresholds = (thr, thr, thr)
-                exact, delay, false, missed = score(
-                    episodes, thresholds, window, count
-                )
+                exact, delay, false, missed = score(episodes, thresholds, window, count)
                 if exact != n:
                     continue
                 slack = margin(episodes, thresholds, window, count)
                 winners.append((slack, -sum(delay), thr, window, count, delay))
-                print(f"{thr:>5} {f'{gw}/{gc}':>10} {f'{pw}/{pc}':>8} "
-                      f"{exact:>4}/{n} {false:>6} {missed:>7} {slack:>7} "
-                      f"{str(delay):>28}")
+                print(
+                    f"{thr:>5} {f'{gw}/{gc}':>10} {f'{pw}/{pc}':>8} "
+                    f"{exact:>4}/{n} {false:>6} {missed:>7} {slack:>7} "
+                    f"{str(delay):>28}"
+                )
 
     if not winners:
         print("no setting labels every episode correctly")
         return
 
-    print(f"\n{len(winners)} of "
-          f"{len(args.thresholds) * len(grasp_grid) * len(place_grid)} settings "
-          f"get all {n} right.")
+    print(
+        f"\n{len(winners)} of "
+        f"{len(args.thresholds) * len(grasp_grid) * len(place_grid)} settings "
+        f"get all {n} right."
+    )
     # Among those, take the one the nearest wrong episode is furthest from
     # tripping, and break ties towards the one that pays out soonest.
     slack, _, thr, window, count, delay = max(winners)
-    print(f"\nsuggested defaults, the widest margin in that region:")
+    print("\nsuggested defaults, the widest margin in that region:")
     print(f"  THRESHOLDS     = {tuple(round(thr, 2) for _ in HEAD_NAMES)}")
     print(f"  CONFIRM_WINDOW = {window}")
     print(f"  CONFIRM_COUNT  = {count}")
-    print(f"\nthe nearest episode that must be rejected is {slack} votes short "
-          f"of being granted")
-    print(f"reward arrives this many frames after the event "
-          f"({', '.join(HEAD_NAMES)}): {delay}")
+    print(
+        f"\nthe nearest episode that must be rejected is {slack} votes short "
+        f"of being granted"
+    )
+    print(
+        f"reward arrives this many frames after the event "
+        f"({', '.join(HEAD_NAMES)}): {delay}"
+    )
 
 
 if __name__ == "__main__":

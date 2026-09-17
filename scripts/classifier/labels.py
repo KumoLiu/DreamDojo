@@ -1,4 +1,4 @@
-"""Canonical milestone labels for the pick_trocar task.
+"""Canonical three-stage labels for the pick_trocar classifier.
 
 The task has three milestones, hand annotated on the teleop demonstrations and
 stored in `meta/episodes.jsonl` under `source_annotation.cleaned_phase_frames`:
@@ -261,7 +261,8 @@ def load_external_labels(path: Path) -> dict[tuple[str, int], ExternalLabel]:
             length=length,
             provenance=r.get("provenance", ""),
             drop=Drop(int(drop["frame"]), bool(drop.get("certain", True)))
-            if drop else None,
+            if drop
+            else None,
         )
     return labels
 
@@ -283,14 +284,17 @@ def summarise(datasets: tuple[str, ...]) -> None:
         counts = np.zeros(NUM_HEADS)
         for e in good:
             counts += cumulative_targets(e.milestones, e.length).sum(0)
-        masked = sum(
-            (loss_weights(e.milestones, e.length) == 0).sum() for e in good
+        masked = sum((loss_weights(e.milestones, e.length) == 0).sum() for e in good)
+        print(
+            f"  {frames} frames, positives: "
+            + ", ".join(
+                f"{n} {100 * c / frames:.1f}%" for n, c in zip(HEAD_NAMES, counts)
+            )
         )
-        print(f"  {frames} frames, positives: " + ", ".join(
-            f"{n} {100 * c / frames:.1f}%" for n, c in zip(HEAD_NAMES, counts)
-        ))
-        print(f"  {masked} of {frames * NUM_HEADS} targets masked near transitions "
-              f"({100 * masked / (frames * NUM_HEADS):.1f}%)")
+        print(
+            f"  {masked} of {frames * NUM_HEADS} targets masked near transitions "
+            f"({100 * masked / (frames * NUM_HEADS):.1f}%)"
+        )
 
 
 if __name__ == "__main__":

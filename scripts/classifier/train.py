@@ -13,7 +13,7 @@ Validation reports frame-level average precision, but the number to watch is
 the milestone frame error: how far the decoded transition sits from the one a
 human marked.
 
-    .venv/bin/python -m scripts.milestone.train --name v2_reproduction
+    .venv/bin/python -m scripts.classifier.train --name v2_reproduction
 """
 
 from __future__ import annotations
@@ -29,24 +29,25 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from scripts.milestone.dataset import MilestoneFrames
-from scripts.milestone.decode import decode
-from scripts.milestone.infer import OUTPUT_ROOT, predict_probs
-from scripts.milestone.labels import (
+from scripts.classifier.dataset import MilestoneFrames
+from scripts.classifier.infer import OUTPUT_ROOT, decode, predict_probs
+from scripts.classifier.labels import (
     HEAD_NAMES,
     NUM_HEADS,
     TELEOP_DATASETS,
     load_external_labels,
     read_episodes,
 )
-from scripts.milestone.model import MilestoneNet
+from scripts.classifier.model import MilestoneNet
 
 TRAIN_DATASET, VAL_DATASET = TELEOP_DATASETS
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True, help="New run name; never overwrite v2.")
+    parser.add_argument(
+        "--name", required=True, help="New run name; never overwrite v2."
+    )
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -94,10 +95,12 @@ def evaluate(model: MilestoneNet, episodes, device: str) -> dict:
     model.eval()
     probs = predict_probs(model, episodes, device=device)
     scores = np.concatenate([probs[(e.dataset, e.episode_index)] for e in episodes])
-    truth = np.concatenate([
-        (np.arange(e.length)[:, None] >= np.asarray(e.milestones)[None, :])
-        for e in episodes
-    ]).astype(np.float32)
+    truth = np.concatenate(
+        [
+            (np.arange(e.length)[:, None] >= np.asarray(e.milestones)[None, :])
+            for e in episodes
+        ]
+    ).astype(np.float32)
 
     report = {"per_head": {}}
     for k, name in enumerate(HEAD_NAMES):
@@ -122,8 +125,12 @@ def evaluate(model: MilestoneNet, episodes, device: str) -> dict:
         name: {
             "median": float(np.median(errs)) if errs else float("nan"),
             "mean": round(float(np.mean(errs)), 2) if errs else float("nan"),
-            "within_5": round(float(np.mean(np.asarray(errs) <= 5)), 3) if errs else 0.0,
-            "within_10": round(float(np.mean(np.asarray(errs) <= 10)), 3) if errs else 0.0,
+            "within_5": round(float(np.mean(np.asarray(errs) <= 5)), 3)
+            if errs
+            else 0.0,
+            "within_10": round(float(np.mean(np.asarray(errs) <= 10)), 3)
+            if errs
+            else 0.0,
         }
         for name, errs in zip(HEAD_NAMES, errors)
     }
@@ -156,7 +163,8 @@ def main() -> None:
             extra = {k: v for k, v in extra.items() if not k[0].endswith("_val")}
         for dataset in sorted({d for d, _ in extra}):
             train_episodes += [
-                e for e in read_episodes(dataset)
+                e
+                for e in read_episodes(dataset)
                 if (e.dataset, e.episode_index) in extra
             ]
         print(f"folding in {len(extra)} rollout episodes")
@@ -166,11 +174,16 @@ def main() -> None:
 
     train_set = MilestoneFrames(train_episodes, train=True, labels=extra)
     print(f"train {len(train_set)} frames from {len(train_episodes)} episodes")
-    print(f"val   {sum(e.length for e in val_episodes)} frames "
-          f"from {len(val_episodes)} episodes")
-    print("positive rates: " + ", ".join(
-        f"{n} {r:.3f}" for n, r in zip(HEAD_NAMES, train_set.positive_rates())
-    ))
+    print(
+        f"val   {sum(e.length for e in val_episodes)} frames "
+        f"from {len(val_episodes)} episodes"
+    )
+    print(
+        "positive rates: "
+        + ", ".join(
+            f"{n} {r:.3f}" for n, r in zip(HEAD_NAMES, train_set.positive_rates())
+        )
+    )
 
     loader = DataLoader(
         train_set,
@@ -187,7 +200,9 @@ def main() -> None:
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
     schedule = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=args.lr, total_steps=args.epochs * len(loader),
+        optimizer,
+        max_lr=args.lr,
+        total_steps=args.epochs * len(loader),
         pct_start=0.1,
     )
     criterion = nn.BCEWithLogitsLoss(reduction="none")
@@ -216,14 +231,18 @@ def main() -> None:
         report["train_loss"] = round(running / seen, 5)
         report["seconds"] = round(time.time() - started, 1)
         history.append(report)
-        print(f"\nepoch {epoch}  loss {report['train_loss']:.4f}  "
-              f"mAP {report['mean_ap']:.4f}  "
-              f"median frame error {report['median_frame_error']:.1f}  "
-              f"({report['seconds']:.0f}s)")
+        print(
+            f"\nepoch {epoch}  loss {report['train_loss']:.4f}  "
+            f"mAP {report['mean_ap']:.4f}  "
+            f"median frame error {report['median_frame_error']:.1f}  "
+            f"({report['seconds']:.0f}s)"
+        )
         for name in HEAD_NAMES:
             h, f = report["per_head"][name], report["frame_error"][name]
-            print(f"    {name:8s} AP {h['ap']:.4f}  recall@P99 {h['recall_at_p99']:.3f}"
-                  f"  frame err med {f['median']:.0f} within10 {f['within_10']:.2f}")
+            print(
+                f"    {name:8s} AP {h['ap']:.4f}  recall@P99 {h['recall_at_p99']:.3f}"
+                f"  frame err med {f['median']:.0f} within10 {f['within_10']:.2f}"
+            )
 
         if report["mean_ap"] > best:
             best = report["mean_ap"]

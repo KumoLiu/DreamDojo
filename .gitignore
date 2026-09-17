@@ -67,8 +67,9 @@ output*/
 # Launchers (internal)
 osmo_launch.py
 ray_launch.py
-checkpoints/
-datasets/
+# checkpoints/
+/datasets/*
+!/datasets/README.md
 results/
 migrated_checkpoints/
 train/

@@ -6,9 +6,9 @@
 # every dataset_path in the experiment YAML to its /data equivalent, so any
 # experiment with any number of datasets works without editing this file.
 #
-# Submit via scripts/submit_sweep.py, or directly:
+# Submit via scripts/cluster/submit.py, or directly:
 #   sbatch --export=ALL,EXPERIMENT=dreamdojo_...,RUN_NAME=my_run \
-#          dreamdojo_sweep_train.slurm
+#          scripts/cluster/train.slurm
 #SBATCH -A healthcareeng_isaac
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -47,7 +47,7 @@ NUM_GPUS="${NUM_GPUS:-${SLURM_GPUS_ON_NODE:-8}}"
 MASTER_PORT="${MASTER_PORT:-$((12000 + RANDOM % 2000))}"
 MAX_ITER="${MAX_ITER:-18000}"
 LOAD_TRAINING_STATE="${LOAD_TRAINING_STATE:-false}"
-# Extra Hydra overrides. OVERRIDES_FILE is what scripts/submit_sweep.py uses,
+# Extra Hydra overrides. OVERRIDES_FILE is what scripts/cluster/submit.py uses,
 # because sbatch --export splits on commas and mangles spaces; OVERRIDES stays
 # available for one-off manual submissions.
 OVERRIDES="${OVERRIDES:-}"
@@ -129,7 +129,7 @@ MOUNTS="${MOUNTS},${REPO_ROOT}/cosmos_predict2:/workspace/cosmos_predict2"
 MOUNTS="${MOUNTS},${REPO_ROOT}/groot_dreams:/workspace/groot_dreams"
 MOUNTS="${MOUNTS},${REPO_ROOT}/shared_meta:/workspace/shared_meta"
 MOUNTS="${MOUNTS},${REPO_ROOT}/scripts:/workspace/scripts"
-MOUNTS="${MOUNTS},${REPO_ROOT}/launch_local.sh:/workspace/launch_local.sh"
+MOUNTS="${MOUNTS},${REPO_ROOT}/external:/workspace/external"
 MOUNTS="${MOUNTS},${DATASET_ROOT}:/data"
 MOUNTS="${MOUNTS},${CHECKPOINT_ROOT}:/workspace/checkpoints"
 MOUNTS="${MOUNTS},${OUTPUT_ROOT}:/outputs"
@@ -157,14 +157,11 @@ srun --ntasks=1 --gpus="${NUM_GPUS}" \
             exit 1
         fi
 
-        # Text2WorldModelRectifiedFlow.forward multiplies the last 32 action
-        # dims by the LAM latent action on every step, and LAM.reload_ckpt only
-        # *prints* when the file is missing, leaving those dims scaled by a
-        # randomly initialised encoder. That trains and converges, so it has to
-        # be caught here rather than noticed in the metrics later.
+        # Fail before model construction; the mounted LAM source also checks
+        # for missing/incompatible weights during strict checkpoint loading.
         if [[ ! -f /workspace/checkpoints/DreamDojo/LAM_400k.ckpt ]]; then
             echo 'Missing LAM checkpoint: /workspace/checkpoints/DreamDojo/LAM_400k.ckpt' >&2
-            echo 'Training would silently run with a random latent action model.' >&2
+            echo 'Refusing to train without the pretrained latent action model.' >&2
             exit 1
         fi
 
@@ -207,7 +204,7 @@ if missing:
     sys.stderr.write('Datasets missing under /data:\n')
     for path in missing:
         sys.stderr.write(f'  {path}\n')
-    sys.stderr.write('Sync them with sync_to_slurm.sh first.\n')
+    sys.stderr.write('Sync them with scripts/cluster/sync.sh data first.\n')
     raise SystemExit(1)
 
 print(' '.join(overrides))
@@ -227,7 +224,7 @@ PY
         fi
 
         NPROC='${NUM_GPUS}' MASTER_PORT='${MASTER_PORT}' \
-            /workspace/launch_local.sh '${EXPERIMENT}' \
+            bash /workspace/scripts/train_wm.sh '${EXPERIMENT}' \
             checkpoint.load_path=\${CHECKPOINT} \
             checkpoint.load_training_state=${LOAD_TRAINING_STATE} \
             checkpoint.strict_resume=false \

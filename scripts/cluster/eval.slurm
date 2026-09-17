@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Evaluate one sweep run on the held-out validation sets and build the overview
-# videos. Pairs with dreamdojo_sweep_train.slurm: pass the same RUN_NAME.
+# videos. Pairs with scripts/cluster/train.slurm: pass the same RUN_NAME.
 #
 #   sbatch --export=ALL,RUN_NAME=lora_r32_scratch_lr3e-4_18k,\
 #EXPERIMENT=dreamdojo_2b_480_640_g1_hf_teleop_rollout_posttrain_lora \
-#          dreamdojo_sweep_eval.slurm
+#          scripts/cluster/eval.slurm
 #SBATCH -A healthcareeng_isaac
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -39,7 +39,7 @@ HORIZON="${HORIZON:-auto}"
 EVAL_TAG="${EVAL_TAG:-}"
 NUM_GPUS="${NUM_GPUS:-${SLURM_GPUS_ON_NODE:-8}}"
 
-# dreamdojo_sweep_train.slurm sets job.name=RUN_NAME, and job.group comes from
+# scripts/cluster/train.slurm sets job.name=RUN_NAME, and job.group comes from
 # the experiment YAML, so the run directory is <group>/<RUN_NAME>.
 CONFIG_NAME="${CONFIG_NAME:-${EXPERIMENT#dreamdojo_}}"
 JOB_GROUP="${JOB_GROUP:-$(
@@ -70,9 +70,9 @@ MOUNTS="${MOUNTS},${REPO_ROOT}/cosmos_predict2:/workspace/cosmos_predict2"
 MOUNTS="${MOUNTS},${REPO_ROOT}/groot_dreams:/workspace/groot_dreams"
 MOUNTS="${MOUNTS},${REPO_ROOT}/shared_meta:/workspace/shared_meta"
 MOUNTS="${MOUNTS},${REPO_ROOT}/scripts:/workspace/scripts"
-MOUNTS="${MOUNTS},${REPO_ROOT}/launch_local.sh:/workspace/launch_local.sh"
-# env_local.sh and .venv come from the container image; mounting the
-# workstation copy would point it at a .venv that does not exist there.
+MOUNTS="${MOUNTS},${REPO_ROOT}/external:/workspace/external"
+# scripts/lib/env.sh resolves /workspace/.venv from the container image;
+# the workstation .venv is deliberately not mounted.
 MOUNTS="${MOUNTS},${DATASET_ROOT}:/workspace/datasets"
 # The model loads the latent action model from the relative path
 # checkpoints/DreamDojo/LAM_400k.ckpt, resolved against the container workdir.
@@ -99,9 +99,7 @@ srun --ntasks=1 --gpus="${NUM_GPUS}" \
             exit 1
         fi
 
-        # A missing LAM checkpoint only prints a warning and leaves the latent
-        # action model randomly initialised, which would corrupt the last 32
-        # action dims and quietly depress every metric.
+        # Check before model construction; mounted LAM source loads strictly.
         if [[ ! -f /workspace/checkpoints/DreamDojo/LAM_400k.ckpt ]]; then
             echo 'Missing LAM checkpoint: /workspace/checkpoints/DreamDojo/LAM_400k.ckpt' >&2
             exit 1
@@ -111,12 +109,11 @@ srun --ntasks=1 --gpus="${NUM_GPUS}" \
             python scripts/convert_distcp_to_pt.py \"\${CKPT_DIR}/model\" \"\${CKPT_DIR}\"
         fi
 
-        VARIANT=custom \
         RUN_ROOT=/outputs/dreamdojo/${JOB_GROUP}/${RUN_NAME} \
         EXPERIMENT='${EXPERIMENT}' \
         ITERATION='${ITERATION}' \
         HORIZON='${HORIZON}' \
         NUM_GPUS='${NUM_GPUS}' \
         OUT_ROOT=/eval/${RUN_NAME}_iter${ITERATION}_h${HORIZON}${EVAL_TAG:+_${EVAL_TAG}} \
-            bash scripts/run_hf_posttrain_val_eval.sh
+            bash scripts/eval_wm.sh
     "
