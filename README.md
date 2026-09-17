@@ -36,6 +36,13 @@
 - [Evaluation](https://github.com/NVIDIA/DreamDojo/blob/main/docs/EVAL.md)
 - [Trouble Shooting](https://github.com/NVIDIA/DreamDojo/blob/main/docs/ISSUES.md)
 
+## Local pick-trocar project
+
+- [Project guide: data, pipeline, world-model results, reward classifier, and cluster](docs/TROCAR_PROJECT.md)
+- [GR00T neural-simulator RL results and runbook](../RLinf/docs/dreamdojo/README.md)
+
+These local project notes are separate from the upstream DreamDojo instructions above.
+
 ## ⭐ Citation
 
 If you find our work useful, please consider citing us and giving a star to our repo.

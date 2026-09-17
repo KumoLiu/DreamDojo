@@ -595,15 +595,16 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
 
         for _, t in enumerate(timesteps_iter):
             latent_model_input = latents
-            timestep = [t]
-
-            timestep = torch.stack(timestep)
-
-            velocity_pred = velocity_fn(noise, latent_model_input, timestep.unsqueeze(0))
+            timestep = t.expand(latents.shape[0], 1)
+            velocity_pred = velocity_fn(noise, latent_model_input, timestep)
             temp_x0 = self.sample_scheduler.step(
-                velocity_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g
+                velocity_pred,
+                t,
+                latents,
+                return_dict=False,
+                generator=seed_g,
             )[0]
-            latents = temp_x0.squeeze(0)
+            latents = temp_x0
 
         if self.net.is_context_parallel_enabled:
             if use_spatial_split:
@@ -721,15 +722,16 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
                 t_prev = t
 
             latent_model_input = latents
-            timestep = [t]
-
-            timestep = torch.stack(timestep)
-
-            velocity_pred = velocity_fn(noise, latent_model_input, timestep.unsqueeze(0))
+            timestep = t.expand(latents.shape[0], 1)
+            velocity_pred = velocity_fn(noise, latent_model_input, timestep)
             temp_x0 = self.sample_scheduler.step(
-                velocity_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g
+                velocity_pred,
+                t,
+                latents,
+                return_dict=False,
+                generator=seed_g,
             )[0]
-            latents = temp_x0.squeeze(0)
+            latents = temp_x0
 
         # Re-enable LoRA if it was disabled
         if lora_disabled:

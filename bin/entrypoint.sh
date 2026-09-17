@@ -19,6 +19,10 @@
 
 set -e
 
-uv sync --locked --extra=${CUDA_NAME} || true
+# Keep image-specific runtime packages that are intentionally installed after
+# the locked base environment. Set DREAMDOJO_RUNTIME_SYNC=0 to skip this check.
+if [[ "${DREAMDOJO_RUNTIME_SYNC:-1}" == "1" ]]; then
+    uv sync --locked --extra="${CUDA_NAME}" --inexact || true
+fi
 
 exec "$@"

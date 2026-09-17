@@ -65,6 +65,7 @@ from cosmos_predict2._src.imaginaire.flags import INTERNAL
 from cosmos_predict2._src.imaginaire.utils import distributed, log
 from cosmos_predict2._src.imaginaire.utils.easy_io import easy_io
 from cosmos_predict2._src.predict2.inference.get_t5_emb import get_text_embedding
+from cosmos_predict2._src.predict2.inference.text_embedding_cache import TextEmbeddingCache
 from cosmos_predict2._src.predict2.utils.model_loader import load_model_from_checkpoint
 
 _IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"]
@@ -251,6 +252,9 @@ class Video2WorldInference:
         offload_diffusion_model: bool = False,
         offload_text_encoder: bool = False,
         offload_tokenizer: bool = False,
+        cache_text_embeddings: bool = False,
+        text_embedding_cache_size: int = 4,
+        skip_zero_guidance: bool = False,
     ):
         """
         Initializes the Video2WorldInference class.
@@ -263,6 +267,11 @@ class Video2WorldInference:
             ckpt_path (str): Path to the model checkpoint (local or S3).
             s3_credential_path (str): Path to S3 credentials file (if loading from S3).
             context_parallel_size (int): Number of GPUs for context parallelism.
+            cache_text_embeddings (bool): Cache exact whole-batch text embeddings.
+                Clear the cache after changing encoder weights in place.
+            text_embedding_cache_size (int): Maximum CPU cache entries per pipeline.
+            skip_zero_guidance (bool): Skip the unused unconditional forward for
+                action-conditioned rectified-flow inference with guidance=0.
         """
         self.experiment_name = experiment_name
         self.ckpt_path = ckpt_path
@@ -273,6 +282,8 @@ class Video2WorldInference:
         self.offload_diffusion_model = offload_diffusion_model
         self.offload_text_encoder = offload_text_encoder
         self.offload_tokenizer = offload_tokenizer
+        self.cache_text_embeddings = cache_text_embeddings
+        self._text_embedding_cache = TextEmbeddingCache(text_embedding_cache_size)
 
         # If no offloading is specified, instruct model loader to move the model to GPU
         model_device = None if offload_diffusion_model else "cuda"
@@ -325,9 +336,14 @@ class Video2WorldInference:
 
         # [On-entry offloading part 3]: Text encoder
         if self.offload_text_encoder:
-            # Text encoder is the first module in the pipeline.
-            # Rather offload it **during** DiT run.
-            pass
+            log.info("[Memory Optimization] Offloading text encoder to CPU")
+            if (
+                model.text_encoder is not None
+                and hasattr(model.text_encoder, "model")
+                and model.text_encoder.model is not None
+            ):
+                model.text_encoder.model = model.text_encoder.model.to("cpu")
+            torch.cuda.empty_cache()
 
         if TYPE_CHECKING:
             from cosmos_predict2._src.predict2.models.video2world_model_rectified_flow import (
@@ -341,9 +357,41 @@ class Video2WorldInference:
             model.net.enable_context_parallel(self.process_group)
 
         self.model = model
+        self.model.inference_skip_zero_guidance = skip_zero_guidance
         self.config = config
-        self.batch_size = 1
         self.neg_t5_embeddings = None
+
+    def clear_text_embedding_cache(self) -> None:
+        """Invalidate cached text after modifying encoder weights in place."""
+        self._text_embedding_cache.clear()
+
+    def _get_text_embeddings(self, prompts: list[str]) -> torch.Tensor:
+        """Preserve full-batch text computation, optionally caching exact results."""
+        encoder = self.model.text_encoder
+        backend = getattr(encoder, "model", None)
+
+        def compute():
+            if encoder is not None:
+                return encoder.compute_text_embeddings_online(
+                    data_batch={"ai_caption": prompts, "images": None},
+                    input_caption_key="ai_caption",
+                )
+            return torch.cat([get_text_embedding(item) for item in prompts], dim=0)
+
+        if not self.cache_text_embeddings or getattr(backend, "training", False):
+            return compute()
+        parameter = next(backend.parameters(), None) if backend is not None else None
+        key = (
+            self.ckpt_path,
+            id(encoder),
+            id(backend),
+            str(parameter.dtype) if parameter is not None else None,
+            torch.is_autocast_enabled("cuda"),
+            str(torch.get_autocast_dtype("cuda")),
+            repr(getattr(encoder, "config", None)),
+            tuple(prompts),
+        )
+        return self._text_embedding_cache.get_or_compute(key, compute)
 
     def _init_distributed(self):
         """Initialize distributed processing for context parallelism."""
@@ -365,9 +413,9 @@ class Video2WorldInference:
     def _get_data_batch_input(
         self,
         video: torch.Tensor,
-        prompt: str,
+        prompt: str | list[str],
         num_conditional_frames: int = 1,
-        negative_prompt: str = _DEFAULT_NEGATIVE_PROMPT,
+        negative_prompt: str | list[str] = _DEFAULT_NEGATIVE_PROMPT,
         use_neg_prompt: bool = True,
         camera: torch.Tensor | None = None,
         action: torch.Tensor | None = None,
@@ -393,16 +441,43 @@ class Video2WorldInference:
             dict: A dictionary containing the prepared data batch, moved to the correct device and dtype.
         """
         B, C, T, H, W = video.shape
+        prompts = [prompt] * B if isinstance(prompt, str) else list(prompt)
+        negative_prompts = (
+            [negative_prompt] * B
+            if isinstance(negative_prompt, str)
+            else list(negative_prompt)
+        )
+        if len(prompts) != B:
+            raise ValueError(f"Expected {B} prompts, got {len(prompts)}")
+        if len(negative_prompts) != B:
+            raise ValueError(
+                f"Expected {B} negative prompts, got {len(negative_prompts)}"
+            )
+
+        if action is not None:
+            if action.ndim == 2:
+                action = action.unsqueeze(0)
+            if action.ndim != 3 or action.shape[0] != B:
+                raise ValueError(
+                    f"Expected action [B,T,D] for B={B}, got {tuple(action.shape)}"
+                )
+        if lam_video is not None:
+            if lam_video.ndim == 4:
+                lam_video = lam_video.unsqueeze(0)
+            if lam_video.shape[0] != B:
+                raise ValueError(
+                    f"Expected lam_video batch {B}, got {tuple(lam_video.shape)}"
+                )
 
         data_batch = {
             "dataset_name": "video_data",
             "video": video,
             "camera": camera,
-            "action": action.unsqueeze(0) if action is not None else None,
-            "fps": torch.randint(16, 32, (self.batch_size,)).float(),  # Random FPS (might be used by model)
-            "padding_mask": torch.zeros(self.batch_size, 1, H, W),  # Padding mask (assumed no padding here)
+            "action": action,
+            "fps": torch.randint(16, 32, (B,)).float(),
+            "padding_mask": torch.zeros(B, 1, H, W),
             "num_conditional_frames": num_conditional_frames,  # Specify number of conditional frames
-            "lam_video": lam_video.unsqueeze(0) if lam_video is not None else None,
+            "lam_video": lam_video,
         }
 
         if use_neg_prompt:
@@ -410,20 +485,10 @@ class Video2WorldInference:
 
         # Compute text embeddings
         if self.model.text_encoder is not None:
-            data_batch["ai_caption"] = [prompt]
-            data_batch["t5_text_embeddings"] = self.model.text_encoder.compute_text_embeddings_online(
-                data_batch={"ai_caption": [prompt], "images": None},
-                input_caption_key="ai_caption",
-            )
-            if use_neg_prompt:
-                data_batch["neg_t5_text_embeddings"] = self.model.text_encoder.compute_text_embeddings_online(
-                    data_batch={"ai_caption": [negative_prompt], "images": None},
-                    input_caption_key="ai_caption",
-                )
-        else:
-            data_batch["t5_text_embeddings"] = get_text_embedding(prompt)
-            if use_neg_prompt:
-                data_batch["neg_t5_text_embeddings"] = get_text_embedding(negative_prompt)
+            data_batch["ai_caption"] = prompts
+        data_batch["t5_text_embeddings"] = self._get_text_embeddings(prompts)
+        if use_neg_prompt:
+            data_batch["neg_t5_text_embeddings"] = self._get_text_embeddings(negative_prompts)
 
         # Move tensors to GPU and convert to bfloat16 if they are floating point
         for k, v in data_batch.items():
@@ -434,7 +499,7 @@ class Video2WorldInference:
 
     def generate_vid2world(
         self,
-        prompt: str,
+        prompt: str | list[str],
         input_path: str | torch.Tensor | None,
         guidance: int = 7,
         num_video_frames: int = 77,
@@ -443,7 +508,7 @@ class Video2WorldInference:
         num_output_video: int = 1,
         resolution: str = "192,320",
         seed: int = 1,
-        negative_prompt: str = _DEFAULT_NEGATIVE_PROMPT,
+        negative_prompt: str | list[str] = _DEFAULT_NEGATIVE_PROMPT,
         camera: torch.Tensor | None = None,
         action: torch.Tensor | None = None,
         num_steps: int = 35,
@@ -541,7 +606,12 @@ class Video2WorldInference:
 
         # Memory Optimization Step 1: Offload Text Encoder
         # Offload text encoder after computing embeddings to free memory
-        if self.offload_text_encoder and self.model.text_encoder is not None:
+        if (
+            self.offload_text_encoder
+            and self.model.text_encoder is not None
+            and getattr(self.model.text_encoder, "model", None) is not None
+            and next(self.model.text_encoder.model.parameters()).device.type != "cpu"
+        ):
             log.info("[Memory Optimization] Offloading text encoder to CPU")
             # TextEncoder is a wrapper class with self.model (the actual neural network)
             if hasattr(self.model.text_encoder, "model") and self.model.text_encoder.model is not None:
@@ -590,7 +660,7 @@ class Video2WorldInference:
             generate_samples = self.model.generate_samples_from_batch
         sample = generate_samples(
             data_batch,
-            n_sample=1,  # Generate one sample
+            n_sample=vid_input.shape[0],
             guidance=guidance,
             seed=seed,  # Fixed seed for reproducibility
             is_negative_prompt=True,  # Use classifier-free guidance
@@ -638,13 +708,6 @@ class Video2WorldInference:
             log.info("[Memory Optimization] Offloading tokenizer decoder to CPU")
             if hasattr(self.model.tokenizer, "decoder") and self.model.tokenizer.decoder is not None:
                 self.model.tokenizer.decoder = self.model.tokenizer.decoder.to("cpu")
-            torch.cuda.empty_cache()
-
-        if self.offload_text_encoder and self.model.text_encoder is not None:
-            log.info("[Memory Optimization] Load text encoder to GPU")
-            # TextEncoder is a wrapper class with self.model (the actual neural network)
-            if hasattr(self.model.text_encoder, "model") and self.model.text_encoder.model is not None:
-                self.model.text_encoder.model = self.model.text_encoder.model.to("cuda")
             torch.cuda.empty_cache()
 
         return video
