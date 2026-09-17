@@ -124,7 +124,8 @@ sbatch --job-name=dd_scratch_r32_reproduction \
 
 唯一的任务配置为[最终rank32 YAML](../configs/2b_480_640_g1_hf_teleop_rollout_posttrain_lora.yaml)。
 历史基础文件默认LR1e-4 / 3k，训练时通过覆盖项变为LR3e-4 / 18k；
-现在已将最终LR、迭代数、seed、optimizer、scheduler、EMA和MC设置写入YAML，
+现在已将最终LR、迭代数、seed、optimizer、scheduler和EMA设置写入YAML；
+MC直接使用上游固定的channel差分、权重0.1，与最终训练相同，已撤下消融开关，
 不再依赖历史sweep或隐藏覆盖项。原experiment名保留，便于RLinf加载已有rank32权重。
 原始训练记录保存在本地`outputs/hf_publish/wm_scratch_r32_lr3e-4_iter18000/provenance/`，
 包含内部路径，本次不上传；HF仅上传推理权重。
@@ -175,7 +176,8 @@ CPU安全加载检查确认rank32、280个LoRA A和280个LoRA B张量；未另�
 
 motion-consistency原实现对B C T H W的dim1求差，实际是channel而非时间。
 后续把MC关掉、改时间轴、降低权重均做过实验；不是只“修正一个维度”就消除了漂移。
-相关训练代码保留；若要重现其他实验，先从备份恢复其配置。
+MC消融分支现已撤回上游，仅保留最终训练的固定channel/0.1损失；
+若要重现其他MC实验，需要从备份同时恢复代码和配置。
 
 不要只按训练迭代比较不同batch：batch翻倍同时翻倍样本/计算。
 也不要只按late/early比值判断漂移，更差的early基线可能让比值虚假变好。
@@ -331,19 +333,43 @@ RLinf本地源码的默认WM权重与experiment已成对改为最终scratch rank
 
 ## 8. 代码边界、检查与整理记录
 
-以下本地源码改动属于当前pipeline，不作为清理冗余回退：
+2026-09-17已通过官方Git远端核实：`NVIDIA/DreamDojo`的`main`为
+`02f119b759d5c7f84a399fdeea3c6e82e7ed6cff`。以下审查以它为基线，
+不是最初的initial commit，也不是本地最近一次cleanup提交。
+上游自己的蒸馏、多机器人支持和10份官方YAML不作为本地冗余修改回退。
+
+当前仅保留下列原有Python文件补丁，以及新加的文本缓存模块：
 
 | 文件/模块 | 保留原因 |
 | --- | --- |
 | external/lam/model.py | 明确LAM路径，缺文件立即失败、严格加载，避免未加载权重仍继续 |
 | inference/video2world.py、inference/text_embedding_cache.py | 批量输入、可选文本缓存与offload |
-| models/text2world_model_rectified_flow.py | 批量采样及MC channel/temporal实验兼容 |
+| models/text2world_model_rectified_flow.py | 仅保留两处batch采样修复；训练损失已恢复上游 |
 | action/models/action_conditioned_video2world_rectified_flow_model.py | 可选guidance=0跳过无用分支 |
-| groot_dreams/data/transform/state_action.py | 仅真正需要旋转变换时要求pytorch3d |
 | imaginaire/lazy_config/lazy.py | resolver重复注册兼容 |
+| imaginaire/utils/checkpoint_db.py | 固定可用tokenizer revision；上游旧revision的tokenizer.pth经查询返回404 |
 
 表中inference/models/action路径均相对`cosmos_predict2/_src/predict2/`，
-imaginaire相对`cosmos_predict2/_src/`。本次只整理文件和文档，未改这些实现。
+imaginaire相对`cosmos_predict2/_src/`。Tokenizer保留revision
+`85f8ae7bfe8f5525c8d103429524dcf12f98bf7b`，没有改成浮动main。
+Dockerfile/entrypoint保留已验证的依赖安装、Pyxis Python路径与可跳过sync开关；
+这些属于环境支持。`.dockerignore`不再排除官方`docker/`源码。
+
+已撤回的不必要上游修改：
+
+| 文件/功能 | 处理与依据 |
+| --- | --- |
+| groot_dreams/data/dataset.py | 完全恢复上游；移除sample_start/sample_end过滤、恢复统计量提示。最终491 train+55 val均无这些字段，采样集合不变 |
+| action/inference/inference_gr00t_warmup.py | 完全恢复上游teacher-generation入口；撤掉额外dataset_path参数和完成样本提前返回，不属于最终非蒸馏WM流程 |
+| interactive/inference/action_video2world.py | 完全恢复上游；撤掉最终流程未使用的experiment_opts扩展 |
+| MC消融开关 | 撤回可调weight/temporal分支及最终YAML的相应字段，保留上游固定channel/0.1行为；不改变最终模型的训练目标 |
+
+旧`scripts/prepare_real_rollout_lerobot.py`依赖已撤回的contact-only采样字段，
+不用于最终HF数据，已移除并备份，避免继续产出不生效的区间标记；没有删除任何真实数据。
+`groot_dreams/data/transform/state_action.py`已按要求恢复上游原版：
+直接导入`pytorch3d.transforms`，缺少依赖时立即报错，不再作为可选依赖。
+本地DreamDojo/RLinf两个venv目前都缺少pytorch3d；实际WM启动前需补装。
+本轮仅做CPU/结构检查，没有伪造依赖完成模型加载，也没有安装依赖、启动训练或修改cluster镜像。
 RLinf侧`toolkits/world_model/dreamdojo_validation.py`验证跨repo动作桥接/条件一致性，
 不迁入本repo；这里的`validate_pick_trocar_world_model.py`仍用于独立WM评估。
 
@@ -372,6 +398,9 @@ CI保持不变；RLinf端动作桥接、推理、LAM、续跑等检查按其项�
 同日统一RLinf最优默认配置、只保留正式v2分类器；14个旧实验/标注脚本及v3测试移除，
 v0/v1/v3输出移到仓库外（可恢复），v2权重和正式标签未改，原v3网页6010已停止。
 备份：`/localhome/local-yunl/code_cleanup_archive/20260917_best_defaults_classifier.jp3dxhnS/`。
+
+同日按官方main完成上游补丁审查和精简；原文件、现有暂存/未暂存差异及验证记录在
+`/localhome/local-yunl/code_cleanup_archive/20260917_upstream_audit.gZE0UCcb/`。
 
 更早的四篇长流水账逐字原文在
 `/localhome/local-yunl/code_cleanup_archive/20260916_project_closeout.bA84wJ/DreamDojo/files/docs/`。

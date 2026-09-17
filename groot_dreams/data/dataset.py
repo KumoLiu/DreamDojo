@@ -377,6 +377,7 @@ class LeRobotSingleDataset(Dataset):
                                 default_state_action_meta.end,
                             )
                             stat = np.array(default_statistics[le_modality][stat_name])
+                            print(f"NOTE: Using default statistics for {our_modality}.{subkey}")
                         except ValueError:
                             indices = np.arange(
                                 state_action_meta.start,
@@ -999,24 +1000,6 @@ class CachedLeRobotSingleDataset(LeRobotSingleDataset):
 class WrappedLeRobotSingleDataset(LeRobotSingleDataset):
     def __init__(self, *args, data_split="full", **kwargs):
         super().__init__(*args, **kwargs)
-
-        episode_path = self.dataset_path / LE_ROBOT_EPISODE_FILENAME
-        with open(episode_path, "r") as f:
-            episode_metadata = [json.loads(line) for line in f]
-        sampling_ranges = {
-            episode["episode_index"]: (
-                episode.get("sample_start", 0),
-                episode.get("sample_end", episode["length"]),
-            )
-            for episode in episode_metadata
-        }
-        self._all_steps = [
-            (trajectory_id, base_index)
-            for trajectory_id, base_index in self._all_steps
-            if sampling_ranges[trajectory_id][0]
-            <= base_index
-            < sampling_ranges[trajectory_id][1]
-        ]
 
         if data_split == "full":
             pass

@@ -107,12 +107,6 @@ class Text2WorldModelRectifiedFlowConfig:
     use_dynamic_shift: bool = False
     train_time_distribution: str = "logitnormal"
     train_time_weight: str = "uniform"
-    motion_consistency_loss_weight: float = 0.1
-    # Which axis of the B C T H W velocity the consistency term differences.
-    # "channel" is the original behaviour and stays the default so no existing
-    # recipe changes; it differences adjacent latent channels, which is not
-    # motion. "temporal" differences adjacent latent frames, which is.
-    motion_consistency_axis: str = "channel"
 
     use_high_sigma_strategy: bool = False  # Whether to use high sigma strategy
     high_sigma_ratio: float = 0.05  # Ratio of high sigma frames
@@ -123,7 +117,6 @@ class Text2WorldModelRectifiedFlowConfig:
 
     def __attrs_post_init__(self):
         assert self.text_encoder_class in ["T5", "umT5", "reason1_2B", "reason1_7B", "reason1p1_7B"]
-        assert self.motion_consistency_axis in ["channel", "temporal"]
 
 
 class Text2WorldModelRectifiedFlow(ImaginaireModel):
@@ -928,18 +921,10 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
         per_instance_loss = torch.mean(
             (vt_pred_B_C_T_H_W - vt_B_C_T_H_W) ** 2, dim=list(range(1, vt_pred_B_C_T_H_W.dim()))
         )
-        if self.config.motion_consistency_loss_weight != 0:
-            axis = {"channel": 1, "temporal": 2}[self.config.motion_consistency_axis]
-            pred_delta = torch.diff(vt_pred_B_C_T_H_W, dim=axis)
-            target_delta = torch.diff(vt_B_C_T_H_W, dim=axis)
-            per_instance_motion_consistency_loss = torch.mean(
-                (pred_delta - target_delta) ** 2,
-                dim=list(range(1, vt_pred_B_C_T_H_W.dim())),
-            )
-            per_instance_loss = (
-                per_instance_loss
-                + per_instance_motion_consistency_loss * self.config.motion_consistency_loss_weight
-            )
+        per_instance_motion_consistency_loss = torch.mean(
+            ((vt_pred_B_C_T_H_W[:, 1:] - vt_pred_B_C_T_H_W[:, :-1]) - (vt_B_C_T_H_W[:, 1:] - vt_B_C_T_H_W[:, :-1])) ** 2, dim=list(range(1, vt_pred_B_C_T_H_W.dim()))
+        )
+        per_instance_loss = per_instance_loss + per_instance_motion_consistency_loss * 0.1
 
         loss = torch.mean(time_weights_B * per_instance_loss)
         output_batch = {

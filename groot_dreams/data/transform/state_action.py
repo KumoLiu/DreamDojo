@@ -3,13 +3,9 @@ import random
 from typing import Any, ClassVar
 
 import numpy as np
+import pytorch3d.transforms as pt
 import torch
 from pydantic import Field, PrivateAttr, field_validator, model_validator
-
-try:
-    import pytorch3d.transforms as pt
-except ImportError:
-    pt = None
 
 from groot_dreams.data.schema import DatasetMetadata, RotationType, StateActionMetadata
 from groot_dreams.data.transform.base import InvertibleModalityTransform, ModalityTransform
@@ -26,10 +22,6 @@ class RotationTransform:
 
         Always use matrix as intermediate representation.
         """
-        if pt is None:
-            raise ImportError(
-                "pytorch3d is required only for datasets with rotation transforms"
-            )
         if from_rep.startswith("euler_angles"):
             from_convention = from_rep.split("_")[-1]
             from_rep = "euler_angles"

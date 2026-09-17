@@ -99,7 +99,6 @@ class ActionStreamingInference:
         context_parallel_size: int = 1,
         enable_fsdp: bool = False,
         torch_compile: bool = False,
-        experiment_opts: List[str] | None = None,
     ) -> None:
         self.experiment_name = experiment_name
         self.ckpt_path = ckpt_path
@@ -117,7 +116,7 @@ class ActionStreamingInference:
             s3_checkpoint_dir=self.ckpt_path,
             config_file=config_path,
             load_ema_to_reg=True,
-            experiment_opts=["ckpt_type=dcp", *(experiment_opts or [])],
+            experiment_opts=["ckpt_type=dcp"],
             skip_teacher_init=True,
             enable_fsdp=enable_fsdp,
         )

@@ -65,9 +65,8 @@ model:
     lora_target_modules: "q_proj,k_proj,v_proj,output_proj,mlp.layer1,mlp.layer2"
     init_lora_weights: true
     use_dora: false
-    # Preserve the actual final recipe, not the later temporal-axis ablation.
-    motion_consistency_loss_weight: 0.1
-    motion_consistency_axis: channel
+    # MC uses the upstream fixed channel-difference loss with weight 0.1,
+    # identical to the final run. No experimental loss switches are needed.
     min_num_conditional_frames: 1
     max_num_conditional_frames: 1
     state_t: 4

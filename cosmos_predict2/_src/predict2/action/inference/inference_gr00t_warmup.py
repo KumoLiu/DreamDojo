@@ -71,12 +71,6 @@ def parse_arguments() -> argparse.Namespace:
     # )
     parser.add_argument("--input_video_root", type=str, default="bridge/annotation/test_100", help="Action root")
     parser.add_argument("--save_root", type=str, default="results/image2world", help="Save root")
-    parser.add_argument(
-        "--dataset_path",
-        type=str,
-        default=None,
-        help="Optional comma-separated dataset paths overriding the embodiment config.",
-    )
 
     parser.add_argument("--start", type=int, default=0, help="Start index for processing files")
     parser.add_argument("--end", type=int, default=100, help="End index for processing files")
@@ -171,10 +165,7 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(0)
 
-    if args.dataset_path:
-        dataset_path = [path.strip() for path in args.dataset_path.split(",")]
-        dataset_mixing_weights = None
-    elif "gr1" in args.experiment:
+    if "gr1" in args.experiment:
         dataset_path, dataset_mixing_weights = get_data_path("gr1")
     elif "g1" in args.experiment:
         dataset_path, dataset_mixing_weights = get_data_path("g1")
@@ -224,12 +215,6 @@ def main():
             
     logger.info(f"Total samples: {len(all_indices)}, Already processed: {len(all_indices) - len(indices_to_process)}, Remaining: {len(indices_to_process)}")
     
-    if not indices_to_process:
-        logger.info("All requested samples already exist.")
-        if torch.distributed.is_initialized():
-            torch.distributed.barrier()
-        return
-
     # Distribute work using strided slicing for even load balancing
     my_indices = indices_to_process[rank::world_size]
     
