@@ -1,6 +1,6 @@
 # Pick-trocar 项目：数据、世界模型与奖励分类器
 
-更新于2026-09-17。本文是本地任务的唯一项目说明，覆盖数据、pipeline、
+更新于2026-09-18。本文是本地任务的唯一项目说明，覆盖数据、pipeline、
 实验结论、分类器及cluster运行。上游通用教程仍保留在docs/。
 RL配置、最佳policy与真机结果以 [RLinf项目文档](../../RLinf/docs/dreamdojo/README.md) 为准，
 不在两处维护完整实验清单。
@@ -233,6 +233,14 @@ ResNet18输入4帧channel堆叠，历史偏移0/4/8/16@30fps，只看当前和�
 `drops_manual.json`、`auto_labels_v2_realnew.npz`、`auto_labels_v1_realnew.npz`
 （后四项均在`outputs/milestone/`）。v2权重SHA256：
 `2dd843e6a78a72a2af626bbdcf7bc9df182ac68f0119d45f1d585e17f93080d7`。
+
+2026-09-18已将正式v2权重上传至私有HF仓库
+[classifiers/milestone_v2/best.pt](https://huggingface.co/nvidia/s2r_models_dev/blob/3453209d8ca72ab3a5acdaa901db959712e27227/yunl/rl/classifiers/milestone_v2/best.pt)。
+固定revision：`3453209d8ca72ab3a5acdaa901db959712e27227`，文件44,900,363 bytes。
+上传前CPU严格加载通过；远端LFS及重新下载的SHA256均与上述本地hash一致。
+仅新增这个checkpoint，原仓库550个文件（含WM与RL policy）未改；未上传标签或视频。
+上传回执与校验记录在仓库外
+`/localhome/local-yunl/code_cleanup_archive/20260918_classifier_upload.hbzFkSau/`。
 
 复现示例使用新name，勿覆盖既有v2；需保持原split、mask和实际reward预处理：
 
