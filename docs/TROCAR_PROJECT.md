@@ -238,9 +238,25 @@ ResNet18输入4帧channel堆叠，历史偏移0/4/8/16@30fps，只看当前和�
 [classifiers/milestone_v2/best.pt](https://huggingface.co/nvidia/s2r_models_dev/blob/3453209d8ca72ab3a5acdaa901db959712e27227/yunl/rl/classifiers/milestone_v2/best.pt)。
 固定revision：`3453209d8ca72ab3a5acdaa901db959712e27227`，文件44,900,363 bytes。
 上传前CPU严格加载通过；远端LFS及重新下载的SHA256均与上述本地hash一致。
-仅新增这个checkpoint，原仓库550个文件（含WM与RL policy）未改；未上传标签或视频。
+该次提交仅新增checkpoint，原仓库550个文件（含WM与RL policy）未改；未包含标签或视频。
 上传回执与校验记录在仓库外
 `/localhome/local-yunl/code_cleanup_archive/20260918_classifier_upload.hbzFkSau/`。
+
+同日已将标注合并为单文件
+[classifiers/milestone_v2/annotations.json](https://huggingface.co/nvidia/s2r_models_dev/blob/8dce47219dbec2a89c38e302ac14c449f7a4aada/yunl/rl/classifiers/milestone_v2/annotations.json)，
+本地为`outputs/milestone/classifier_annotations_v2.json`。包含250条teleop记录（含2条排除说明）、
+296条rollout审阅标签、24条人工掉落标注、30条奖励校准标注，以及两个版本各120条
+real_new自动预测及解码结果。自动预测不是人工真值，也未混入最终490条训练数据。
+训练/验证划分、原始阶段标注、per-head mask、drop规则、数据来源与恢复说明均在JSON中；
+30条校准标签中有25条与旧审阅阶段帧不同，按用途分别保留，不自动覆盖。
+原始标签、训练代码和权重未修改；544条有效episode的target/mask与原实现一致，
+240组概率数组转回float32后逐字节一致。仅新增此JSON，HF原有551个文件未变。
+文件8,750,884 bytes，重新下载校验SHA256一致：
+`e1ce99eeecdbb258603d6e4b8690a347f0c5ac933ecacba16de8555cd5910afc`。
+这是归档格式，不能直接传给`--extra-labels`；复现时把`reviewed_rollout_labels`字段
+另存为原格式JSON列表，teleop仍配合原数据集使用。视频、图像和权重不在此文件中。
+导出脚本、校验和上传回执位于仓库外
+`/localhome/local-yunl/code_cleanup_archive/20260918_classifier_annotations.eo946SXT/`。
 
 复现示例使用新name，勿覆盖既有v2；需保持原split、mask和实际reward预处理：
 
