@@ -550,11 +550,12 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
                 _W // self.tokenizer.spatial_compression_factor,
             ]
 
-        noise = misc.arch_invariant_rand(
+        noise = self._inference_noise(
             (n_sample,) + tuple(state_shape),
             torch.float32,
             self.tensor_kwargs["device"],
             seed,
+            kwargs.get("sample_seeds"),
         )
 
         seed_g = torch.Generator(device=self.tensor_kwargs["device"])
@@ -600,10 +601,9 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
             timestep = torch.stack(timestep)
 
             velocity_pred = velocity_fn(noise, latent_model_input, timestep.unsqueeze(0))
-            temp_x0 = self.sample_scheduler.step(
-                velocity_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g
+            latents = self.sample_scheduler.step(
+                velocity_pred, t, latents, return_dict=False, generator=seed_g
             )[0]
-            latents = temp_x0.squeeze(0)
 
         if self.net.is_context_parallel_enabled:
             if use_spatial_split:
@@ -660,11 +660,12 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
                 _W // self.tokenizer.spatial_compression_factor,
             ]
 
-        noise = misc.arch_invariant_rand(
+        noise = self._inference_noise(
             (n_sample,) + tuple(state_shape),
             torch.float32,
             self.tensor_kwargs["device"],
             seed,
+            kwargs.get("sample_seeds"),
         )
 
         seed_g = torch.Generator(device=self.tensor_kwargs["device"])
@@ -726,10 +727,9 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
             timestep = torch.stack(timestep)
 
             velocity_pred = velocity_fn(noise, latent_model_input, timestep.unsqueeze(0))
-            temp_x0 = self.sample_scheduler.step(
-                velocity_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g
+            latents = self.sample_scheduler.step(
+                velocity_pred, t, latents, return_dict=False, generator=seed_g
             )[0]
-            latents = temp_x0.squeeze(0)
 
         # Re-enable LoRA if it was disabled
         if lora_disabled:
@@ -744,6 +744,18 @@ class Text2WorldModelRectifiedFlow(ImaginaireModel):
                 latents = rearrange(latents, "b c (t h w) -> b c t h w", t=state_shape[1], h=state_shape[2])
 
         return latents
+
+    @staticmethod
+    def _inference_noise(shape, dtype, device, seed, sample_seeds=None):
+        """Keep each environment's noise independent of batch size and row order."""
+        if sample_seeds is None:
+            return misc.arch_invariant_rand(shape, dtype, device, seed)
+        if len(sample_seeds) != shape[0]:
+            raise ValueError("sample_seeds must have one seed per batch row")
+        return torch.cat([
+            misc.arch_invariant_rand((1, *shape[1:]), dtype, device, int(row_seed))
+            for row_seed in sample_seeds
+        ])
 
     # ------------------------ Sampling ------------------------
     @torch.no_grad()
