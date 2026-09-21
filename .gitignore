@@ -66,3 +66,5 @@ output*/
 # Launchers (internal)
 osmo_launch.py
 ray_launch.py
+datasets/g1_hf*
+datasets/milestone_cache/*

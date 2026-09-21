@@ -1,4 +1,4 @@
-from os import makedirs, path
+from os import environ, makedirs, path
 from typing import Callable, Dict, Iterable, Tuple, Union
 
 import numpy as np
@@ -33,6 +33,10 @@ class LAM(LightningModule):
         ckpt_path: Union[None, str] = None
     ) -> None:
         super(LAM, self).__init__()
+        if ckpt_path == "checkpoints/DreamDojo/LAM_400k.ckpt":
+            ckpt_path = environ.get("DREAMDOJO_LAM_CHECKPOINT", ckpt_path)
+        if ckpt_path is not None and not path.isfile(ckpt_path):
+            raise FileNotFoundError(f"LAM checkpoint not found: {ckpt_path}")
         self.lam = LatentActionModel(
             in_dim=image_channels,
             model_dim=lam_model_dim,
@@ -62,7 +66,7 @@ class LAM(LightningModule):
             if len(unexpected) > 0:
                 print(f"Unexpected LAM keys: {unexpected}")
         else:
-            print(f"LAM checkpoint {ckpt_path} does not exist")
+            raise FileNotFoundError(f"LAM checkpoint {ckpt_path} does not exist")
 
     def shared_step(self, batch: Dict) -> Tuple:
         outputs = self.lam(batch)
