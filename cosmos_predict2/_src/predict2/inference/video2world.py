@@ -393,14 +393,18 @@ class Video2WorldInference:
             dict: A dictionary containing the prepared data batch, moved to the correct device and dtype.
         """
         B, C, T, H, W = video.shape
+        if action is not None:
+            action = action.unsqueeze(0) if action.ndim == 2 else action
+            if action.ndim != 3 or action.shape[0] != B:
+                raise ValueError("action must have shape (B,T,D), or (T,D) for one video")
 
         data_batch = {
             "dataset_name": "video_data",
             "video": video,
             "camera": camera,
-            "action": action.unsqueeze(0) if action is not None else None,
-            "fps": torch.randint(16, 32, (self.batch_size,)).float(),  # Random FPS (might be used by model)
-            "padding_mask": torch.zeros(self.batch_size, 1, H, W),  # Padding mask (assumed no padding here)
+            "action": action,
+            "fps": torch.randint(16, 32, (B,)).float(),  # Random FPS (might be used by model)
+            "padding_mask": torch.zeros(B, 1, H, W),  # Padding mask (assumed no padding here)
             "num_conditional_frames": num_conditional_frames,  # Specify number of conditional frames
             "lam_video": lam_video.unsqueeze(0) if lam_video is not None else None,
         }
@@ -425,6 +429,13 @@ class Video2WorldInference:
             if use_neg_prompt:
                 data_batch["neg_t5_text_embeddings"] = get_text_embedding(negative_prompt)
 
+        # A single prompt applies to every video; encode it once, then share it.
+        if "ai_caption" in data_batch:
+            data_batch["ai_caption"] = [prompt] * B
+        for key in ("t5_text_embeddings", "neg_t5_text_embeddings"):
+            if key in data_batch:
+                data_batch[key] = data_batch[key].expand(B, -1, -1).contiguous()
+
         # Move tensors to GPU and convert to bfloat16 if they are floating point
         for k, v in data_batch.items():
             if isinstance(v, torch.Tensor) and torch.is_floating_point(data_batch[k]):
@@ -448,6 +459,7 @@ class Video2WorldInference:
         action: torch.Tensor | None = None,
         num_steps: int = 35,
         lam_video: torch.Tensor | None = None,
+        sample_seeds: list[int] | None = None,
     ):
         """
         Generates a video based on an input image or video and text prompt.
@@ -457,7 +469,8 @@ class Video2WorldInference:
 
         Args:
             prompt: The text prompt describing the desired video content/style.
-            input_path: Path to the input image or video file or a torch.Tensor.
+            input_path: Path to the input image or video file or a (B,C,T,H,W) tensor.
+            sample_seeds: Optional independent noise seed for each batch row.
             guidance: Classifier-free guidance scale. Defaults to 7.
             num_video_frames: Number of video frames to generate. Defaults to 77.
             num_latent_conditional_frames : Number of latent conditional frames. Defaults to 1.
@@ -572,6 +585,8 @@ class Video2WorldInference:
                 "num_input_video": num_input_video,
                 "num_output_video": num_output_video,
             }
+        if sample_seeds is not None:
+            extra_kwargs["sample_seeds"] = sample_seeds
         
         # lam_video = rearrange(data_batch["lam_video"], "b (p t) h w c -> (b p) t h w c", t=2)
         # lam_input = {"videos": lam_video}
@@ -590,7 +605,7 @@ class Video2WorldInference:
             generate_samples = self.model.generate_samples_from_batch
         sample = generate_samples(
             data_batch,
-            n_sample=1,  # Generate one sample
+            n_sample=vid_input.shape[0],
             guidance=guidance,
             seed=seed,  # Fixed seed for reproducibility
             is_negative_prompt=True,  # Use classifier-free guidance
