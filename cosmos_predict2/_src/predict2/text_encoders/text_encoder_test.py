@@ -101,6 +101,41 @@ class TestTextEncoder(unittest.TestCase):
         assert config.model_config is not None
 
 
+@pytest.mark.L0
+def test_legacy_default_rope_without_transformers_registry_entry():
+    from types import SimpleNamespace
+
+    from cosmos_predict2._src.reason1.networks.qwen2_5_vl import _default_rope_parameters
+
+    config = SimpleNamespace(hidden_size=16, num_attention_heads=4, rope_theta=10000.0)
+    frequencies, scale = _default_rope_parameters(config, torch.device("cpu"))
+    torch.testing.assert_close(frequencies, torch.tensor([1.0, 0.01]))
+    assert scale == 1.0
+
+
+@pytest.mark.L0
+def test_text_only_tokenizer_omits_video_fps():
+    from unittest.mock import Mock, patch
+
+    from cosmos_predict2._src.reason1.tokenizer.processor import Processor
+
+    tokenizer = Processor.__new__(Processor)
+    tokenizer.name = "Qwen/Qwen2.5-VL-7B-Instruct"
+    tokenizer.is_vision_tokenizer = True
+    tokenizer.processor = Mock(
+        return_value={"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
+    )
+    tokenizer.processor.apply_chat_template.return_value = "prompt"
+    module = "cosmos_predict2._src.reason1.tokenizer.processor"
+    with (
+        patch(f"{module}.process_vision_info", return_value=(None, None, {})),
+        patch(f"{module}.extract_vision_info", return_value=[]),
+    ):
+        result = tokenizer.apply_chat_template([{"role": "user", "content": [{"type": "text", "text": ""}]}])
+    assert "fps" not in tokenizer.processor.call_args.kwargs
+    assert result["input_ids"].shape == (2,)
+
+
 if __name__ == "__main__":
     # Set up test environment
     torch.backends.cudnn.deterministic = True

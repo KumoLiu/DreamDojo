@@ -287,6 +287,10 @@ class ActionVideo2WorldModelRectifiedFlow(Text2WorldModelRectifiedFlow):
 
         def velocity_fn(noise: torch.Tensor, noise_x: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
             cond_v = self.denoise(noise, noise_x, timestep, condition)
+            # Opt-in inference fast path; preserve all conditioning setup and
+            # nonzero-guidance behavior. The environment uses guidance=0.
+            if guidance == 0 and getattr(self, "inference_skip_zero_guidance", False):
+                return cond_v
             uncond_v = self.denoise(noise, noise_x, timestep, uncondition)
             velocity_pred = cond_v + guidance * (cond_v - uncond_v)
             return velocity_pred
