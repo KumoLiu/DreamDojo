@@ -571,6 +571,14 @@ class Qwen2_5_VisionTransformerPretrainedModel(nn.Module):
         return hidden_states
 
 
+def _default_rope_parameters(config, device=None, seq_len=None):
+    """Original RoPE for legacy Cosmos configs; HF5 removed this registry entry."""
+    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+    dim = int(head_dim * getattr(config, "partial_rotary_factor", 1.0))
+    positions = torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float)
+    return 1.0 / (config.rope_theta ** (positions / dim)), 1.0
+
+
 class Qwen2_5_VLRotaryEmbedding(nn.Module):
     def __init__(self, config: Qwen2_5_VLConfig, device=None):
         super().__init__()
@@ -583,7 +591,11 @@ class Qwen2_5_VLRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        self.rope_init_fn = (
+            ROPE_INIT_FUNCTIONS.get("default", _default_rope_parameters)
+            if self.rope_type == "default"
+            else ROPE_INIT_FUNCTIONS[self.rope_type]
+        )
 
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
@@ -939,6 +951,7 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
             sliding_window=sliding_window,
             is_causal=self.is_causal,
             use_top_left_mask=self._flash_attn_uses_top_left_mask,
+            attn_implementation="flash_attention_2",
         )
 
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()

@@ -121,7 +121,9 @@ class Processor:
                     videos=video_inputs,
                     padding=False,
                     return_tensors=return_tensors,
-                    fps=fps_list,
+                    # Text/image-only prompts have no video frame rate. HF5
+                    # validates this argument even when no videos are supplied.
+                    **({"fps": fps_list} if fps_list else {}),
                 )
             else:
                 inputs = self.processor(

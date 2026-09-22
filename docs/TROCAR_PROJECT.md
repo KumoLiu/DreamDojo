@@ -1,6 +1,6 @@
 # Pick-trocar 项目：数据、世界模型与奖励分类器
 
-更新于2026-09-18。本文是本地任务的唯一项目说明，覆盖数据、pipeline、
+更新于2026-09-20。本文是本地任务的唯一项目说明，覆盖数据、pipeline、
 实验结论、分类器及cluster运行。上游通用教程仍保留在docs/。
 RL配置、最佳policy与真机结果以 [RLinf项目文档](../../RLinf/docs/dreamdojo/README.md) 为准，
 不在两处维护完整实验清单。
@@ -67,7 +67,13 @@ Reward的有效train数为490，因为分类器另有标注有效性筛选；不
 Teleop → GR00T N1.7 SFT → 两个SFT checkpoint真机rollout → 合并数据。
 合并数据分别用于DreamDojo LoRA适配、带阶段标注的分类器训练；随后在RLinf中
 冻结WM和分类器，用GRPO更新GR00T policy，最后对RL与SFT checkpoint做真机对照。
-本repo负责WM和分类器；GR00T在线动作桥接、KIR、GRPO与policy评测归RLinf。
+本repo负责WM和分类器；GRPO、policy优化与训练采样策略归RLinf。
+框架无关的在线工具已归并到 `dreamdojo_runtime/`：`dataset.py` 提供录制状态初始化，
+`actions.py` 提供28D到DreamDojo conditioning的转换，`reward.py` 提供批量三阶段奖励。
+IsaacLab neural simulator直接使用这些实现，不再依赖RLinf；RLinf旧路径保留为兼容导入，
+避免维护两套算法。迁移没有改变动作编码、KIR读取或分类器阈值。
+运行时将本repo加入 `PYTHONPATH`，或安装包含 `dreamdojo_runtime` 的新版本包。
+此次未更新cluster镜像，部署时须同步两个repo，不能只把RLinf兼容入口覆盖进旧镜像。
 
 官方初始化：`checkpoints/DreamDojo/2B_G1_post-train/iter_000050000`。
 主配方：13-frame clips，数据混合0.34/0.33/0.33，LoRA rank32，
@@ -413,9 +419,13 @@ RLinf本地源码的默认WM权重与experiment已成对改为最终scratch rank
 | action/models/action_conditioned_video2world_rectified_flow_model.py | 可选guidance=0跳过无用分支 |
 | imaginaire/lazy_config/lazy.py | resolver重复注册兼容 |
 | imaginaire/utils/checkpoint_db.py | 固定可用tokenizer revision；上游旧revision的tokenizer.pth经查询返回404 |
+| reason1/networks/qwen2_5_vl.py | 2026-09-20 Python 3.12/Transformers 5 试验：保留默认RoPE原公式，显式选择FA2；旧环境回归通过 |
+| reason1/tokenizer/processor.py | 纯文本/图像输入不传空fps列表，兼容HF5严格参数检查；不改变文本内容 |
 
 表中inference/models/action路径均相对`cosmos_predict2/_src/predict2/`，
-imaginaire相对`cosmos_predict2/_src/`。Tokenizer保留revision
+imaginaire/reason1相对`cosmos_predict2/_src/`。统一环境试验说明集中在
+[IsaacLab文档](../../IsaacLab/source/isaaclab_contrib/docs/neural_sim.md#isolated-python-312-compatibility-trial)，
+未切换正式环境、未验证独立WM长训；小测试补在原有`text_encoder_test.py`，CI不变。Tokenizer保留revision
 `85f8ae7bfe8f5525c8d103429524dcf12f98bf7b`，没有改成浮动main。
 Dockerfile/entrypoint保留已验证的依赖安装、Pyxis Python路径与可跳过sync开关；
 这些属于环境支持。`.dockerignore`不再排除官方`docker/`源码。
